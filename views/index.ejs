@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OmniWatch - Real-time Guard Monitoring System</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #e2e8f0;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container { max-width: 1000px; margin: 0 auto; padding: 60px 20px; }
+    header {
+      text-align: center;
+      margin-bottom: 60px;
+    }
+    .logo {
+      font-size: 4rem;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 3rem;
+      color: #fff;
+      margin-bottom: 15px;
+      font-weight: 700;
+    }
+    .subtitle {
+      color: #94a3b8;
+      font-size: 1.3rem;
+      margin-bottom: 30px;
+    }
+    .tagline {
+      color: #60a5fa;
+      font-size: 1.1rem;
+      margin-bottom: 40px;
+    }
+    .card {
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 30px;
+      margin-bottom: 25px;
+      border: 1px solid #334155;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+    }
+    .card-icon {
+      font-size: 2.5rem;
+      margin-bottom: 15px;
+    }
+    h2 {
+      color: #fff;
+      font-size: 1.4rem;
+      margin-bottom: 10px;
+    }
+    p { color: #94a3b8; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 25px;
+      margin-bottom: 50px;
+    }
+    .btn {
+      display: inline-block;
+      background: #2563eb;
+      color: #fff;
+      padding: 14px 28px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 600;
+      margin: 5px;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: #1d4ed8; }
+    .btn-outline {
+      background: transparent;
+      border: 2px solid #334155;
+    }
+    .btn-outline:hover { border-color: #60a5fa; }
+    .section-title {
+      color: #fff;
+      font-size: 2rem;
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    .features {
+      margin-bottom: 50px;
+    }
+    .feature-item {
+      display: flex;
+      align-items: center;
+      padding: 15px 0;
+      border-bottom: 1px solid #334155;
+    }
+    .feature-icon {
+      font-size: 1.5rem;
+      margin-right: 15px;
+    }
+    footer {
+      text-align: center;
+      padding-top: 40px;
+      border-top: 1px solid #334155;
+      color: #64748b;
+    }
+    .status {
+      display: inline-block;
+      background: #22c55e;
+      color: #000;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">🛡️</div>
+      <h1>OmniWatch</h1>
+      <p class="subtitle">Real-time Guard Monitoring & Management System</p>
+      <p class="tagline">Keep your security team connected and accountable</p>
+      <div style="margin-top: 20px;">
+        <span class="status">🚀 API Live</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-icon">📱</div>
+        <h2>Mobile App</h2>
+        <p>React Native & Expo app for guards to check in, report incidents, and receive assignments in real-time.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🔌</div>
+        <h2>RESTful API</h2>
+        <p>Complete backend API built with Express.js and Directus for secure authentication and data management.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">📊</div>
+        <h2>Dashboard</h2>
+        <p>Admin dashboard for supervisors to monitor guard activity, manage shifts, and view reports.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🔐</div>
+        <h2>Secure Auth</h2>
+        <p>JWT-based authentication with phone number verification and role-based access control.</p>
+      </div>
+    </div>
+
+    <h2 class="section-title">Quick Links</h2>
+    <div style="text-align: center; margin-bottom: 50px;">
+      <a href="/documentation" class="btn">📖 API Documentation</a>
+      <a href="http://localhost:5000/api" class="btn btn-outline">🔗 API Endpoints</a>
+    </div>
+
+    <div class="features">
+      <h2 class="section-title">Features</h2>
+      <div class="feature-item">
+        <span class="feature-icon">📍</span>
+        <div>
+          <strong style="color: #fff;">Real-time Location Tracking</strong>
+          <p style="margin: 0;">Track guard positions and ensure coverage</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <span class="feature-icon">📋</span>
+        <div>
+          <strong style="color: #fff;">Shift Management</strong>
+          <p style="margin: 0;">Assign and monitor guard shifts</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <span class="feature-icon">📢</span>
+        <div>
+          <strong style="color: #fff;">Incident Reporting</strong>
+          <p style="margin: 0;">Quick reporting with photos and GPS data</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <span class="feature-icon">🔔</span>
+        <div>
+          <strong style="color: #fff;">Real-time Notifications</strong>
+          <p style="margin: 0;">Instant alerts for emergencies and updates</p>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <p>OmniWatch v1.0.0 | Built with ❤️</p>
+      <p style="margin-top: 10px; font-size: 0.9rem;">
+        Backend: Express.js + PostgreSQL + Directus<br>
+        Frontend: React Native + Expo Router
+      </p>
+    </footer>
+  </div>
+</body>
+</html>
+
