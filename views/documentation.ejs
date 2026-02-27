@@ -47,6 +47,8 @@
     }
     .post { background: #22c55e; color: #000; }
     .get { background: #3b82f6; color: #fff; }
+    .put { background: #06b6d4; color: #001018; }
+    .patch { background: #a855f7; color: #fff; }
     .delete { background: #ef4444; color: #fff; }
     .path {
       font-family: 'Monaco', 'Menlo', monospace;
@@ -92,6 +94,8 @@
     .status-200 { background: #22c55e; color: #000; }
     .status-400 { background: #f59e0b; color: #000; }
     .status-401 { background: #ef4444; color: #fff; }
+    .status-404 { background: #ef4444; color: #fff; }
+    .status-409 { background: #f97316; color: #fff; }
     .status-500 { background: #ef4444; color: #fff; }
     .section-nav {
       position: fixed;
@@ -124,7 +128,7 @@
   <div class="container">
     <header>
       <h1>🚀 OmniWatch API Documentation</h1>
-      <p class="subtitle">Version 1.0.0 | Last Updated: January 2024</p>
+      <p class="subtitle">Version 1.0.0 | Last Updated: February 2026</p>
     </header>
 
     <h2 id="authentication">🔐 Authentication</h2>
@@ -403,30 +407,485 @@ Authorization: Bearer <your-jwt-token></code>
       </div>
     </div>
 
-    <!-- Guard Shifts -->
-    <div class="endpoint" id="guard-shifts">
+    <h2 id="admin-management">🧭 Admin Management APIs</h2>
+    <p style="color: #94a3b8; margin-bottom: 20px;">
+      These endpoints are used by the admin dashboard to manage guards, assignments, and locations.
+      All are scoped to the authenticated admin's organization via <code>invite_code</code>.
+    </p>
+
+    <!-- Admin Guards -->
+    <div class="endpoint" id="admin-guards">
       <span class="method get">GET</span>
-      <span class="path">/api/guard/shifts</span>
+      <span class="path">/api/admin/guards</span>
       <span class="auth-badge">PROTECTED</span>
-      <p class="description">Get assigned shifts for guards/supervisors</p>
-      
+      <p class="description">List all guards in the admin organization, enriched with latest assignment and patrol-derived online/last-seen data.</p>
+
+      <h3>Response Fields (per guard)</h3>
+      <table>
+        <thead>
+          <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="param">id</td><td>string</td><td>Guard user ID</td></tr>
+          <tr><td class="param">first_name</td><td>string</td><td>Guard first name</td></tr>
+          <tr><td class="param">last_name</td><td>string</td><td>Guard last name</td></tr>
+          <tr><td class="param">phone</td><td>string</td><td>Guard phone number</td></tr>
+          <tr><td class="param">location</td><td>string</td><td>Resolved location name from latest assignment</td></tr>
+          <tr><td class="param">location_id</td><td>string</td><td>Location ID from latest assignment</td></tr>
+          <tr><td class="param">assigned_areas</td><td>string</td><td>Comma-separated assigned areas</td></tr>
+          <tr><td class="param">operating_hours_start</td><td>string</td><td>Assignment start time</td></tr>
+          <tr><td class="param">operating_hours_end</td><td>string</td><td>Assignment end time</td></tr>
+          <tr><td class="param">is_online</td><td>boolean</td><td><code>true</code> when latest patrol is active and not ended</td></tr>
+          <tr><td class="param">last_seen</td><td>string|null</td><td>Latest patrol <code>end_time</code> or fallback access time</td></tr>
+          <tr><td class="param">last_seen_display</td><td>string</td><td><code>"Online (Currently on patrol)"</code> when active, otherwise timestamp or <code>"Never"</code></td></tr>
+        </tbody>
+      </table>
+
       <h3>Example Request</h3>
       <div class="code-block">
-        <code><span class="string">curl</span> -X GET http://localhost:5000/api/guard/shifts \<br>
-&nbsp;&nbsp;-H <span class="string">"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."</span></code>
+        <code><span class="string">curl</span> -X GET http://localhost:5000/api/admin/guards \<br>
+&nbsp;&nbsp;-H <span class="string">"Authorization: Bearer &lt;token&gt;"</span></code>
       </div>
 
       <h3>Example Response</h3>
       <div class="code-block">
         <code>{<br>
-&nbsp;&nbsp;<span class="param">"message"</span>: <span class="string">"Your shifts"</span>,<br>
-&nbsp;&nbsp;<span class="param">"user"</span>: { <span class="param">"id"</span>: <span class="string">"abc123"</span>, <span class="param">"role"</span>: <span class="string">"guard"</span> },<br>
-&nbsp;&nbsp;<span class="param">"shifts"</span>: [<br>
-&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="param">"id"</span>: <span class="string">1</span>, <span class="param">"date"</span>: <span class="string">"2024-01-15"</span>, <span class="param">"time"</span>: <span class="string">"08:00 - 16:00"</span>, <span class="param">"location"</span>: <span class="string">"Main Entrance"</span> },<br>
-&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="param">"id"</span>: <span class="string">2</span>, <span class="param">"date"</span>: <span class="string">"2024-01-16"</span>, <span class="param">"time"</span>: <span class="string">"16:00 - 24:00"</span>, <span class="param">"location"</span>: <span class="string">"Parking Lot"</span> }<br>
+&nbsp;&nbsp;<span class="param">"guards"</span>: [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"id"</span>: <span class="string">"f3a9..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"first_name"</span>: <span class="string">"Jane"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"last_name"</span>: <span class="string">"Doe"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"phone"</span>: <span class="string">"+2547..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"location"</span>: <span class="string">"Main Gate"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"location_id"</span>: <span class="string">"8b2a..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"is_online"</span>: <span class="string">true</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"last_seen_display"</span>: <span class="string">"Online (Currently on patrol)"</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
 &nbsp;&nbsp;]<br>
 }</code>
       </div>
+    </div>
+
+    <!-- Admin Remove Guard -->
+    <div class="endpoint" id="admin-remove-guard">
+      <span class="method delete">DELETE</span>
+      <span class="path">/api/admin/guards/:id</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Remove a guard from the organization and cascade-delete related records by <code>user_id</code> from assignments, logs, and patrols.</p>
+
+      <h3>Path Params</h3>
+      <table>
+        <thead>
+          <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="param">id</td><td>string</td><td>Yes</td><td>Guard user ID</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Example Request</h3>
+      <div class="code-block">
+        <code><span class="string">curl</span> -X DELETE http://localhost:5000/api/admin/guards/f3a9... \<br>
+&nbsp;&nbsp;-H <span class="string">"Authorization: Bearer &lt;token&gt;"</span></code>
+      </div>
+
+      <h3>Example Response</h3>
+      <div class="code-block">
+        <code>{<br>
+&nbsp;&nbsp;<span class="param">"message"</span>: <span class="string">"Guard removed successfully"</span>,<br>
+&nbsp;&nbsp;<span class="param">"deleted"</span>: {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"assignments"</span>: <span class="string">2</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"logs"</span>: <span class="string">8</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"patrols"</span>: <span class="string">5</span><br>
+&nbsp;&nbsp;}<br>
+}</code>
+      </div>
+
+      <div class="response">
+        <span class="response-title">Status Codes:</span>
+        <span class="status status-200">200 OK</span>
+        <span class="status status-400">400 Bad Request</span>
+        <span class="status status-401">401 Unauthorized</span>
+        <span class="status status-404">404 Not Found</span>
+        <span class="status status-500">500 Internal Server Error</span>
+      </div>
+    </div>
+
+    <!-- Admin Create Assignment -->
+    <div class="endpoint" id="admin-create-assignment">
+      <span class="method post">POST</span>
+      <span class="path">/api/admin/assignments</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Create a new assignment for a guard in the same organization.</p>
+
+      <h3>Request Body</h3>
+      <table>
+        <thead>
+          <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="param">user_id</td><td>string</td><td>Yes</td><td>Guard user ID</td></tr>
+          <tr><td class="param">location</td><td>string</td><td>Yes</td><td>Location ID</td></tr>
+          <tr><td class="param">assigned_areas</td><td>string</td><td>Yes</td><td>Comma-separated areas/checkpoints</td></tr>
+          <tr><td class="param">start_time</td><td>string</td><td>Yes</td><td>Assignment start time (e.g., <code>09:00</code>)</td></tr>
+          <tr><td class="param">end_time</td><td>string</td><td>Yes</td><td>Assignment end time (e.g., <code>17:00</code>)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Example Request</h3>
+      <div class="code-block">
+        <code><span class="string">curl</span> -X POST http://localhost:5000/api/admin/assignments \<br>
+&nbsp;&nbsp;-H <span class="string">"Authorization: Bearer &lt;token&gt;"</span> \<br>
+&nbsp;&nbsp;-H <span class="string">"Content-Type: application/json"</span> \<br>
+&nbsp;&nbsp;-d '{<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"user_id"</span>: <span class="string">"f3a9..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"location"</span>: <span class="string">"8b2a..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"assigned_areas"</span>: <span class="string">"Gate A, Lobby"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"start_time"</span>: <span class="string">"09:00"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"end_time"</span>: <span class="string">"17:00"</span><br>
+&nbsp;&nbsp;}'</code>
+      </div>
+
+      <h3>Example Response</h3>
+      <div class="code-block">
+        <code>{<br>
+&nbsp;&nbsp;<span class="param">"message"</span>: <span class="string">"Assignment created successfully"</span>,<br>
+&nbsp;&nbsp;<span class="param">"assignment"</span>: {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"id"</span>: <span class="string">"a7bc..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"user_id"</span>: <span class="string">"f3a9..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"location"</span>: <span class="string">"8b2a..."</span><br>
+&nbsp;&nbsp;}<br>
+}</code>
+      </div>
+    </div>
+
+    <!-- Admin Locations List -->
+    <div class="endpoint" id="admin-locations-list">
+      <span class="method get">GET</span>
+      <span class="path">/api/admin/locations</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">List all locations in the authenticated admin organization.</p>
+
+      <h3>Example Response</h3>
+      <div class="code-block">
+        <code>{<br>
+&nbsp;&nbsp;<span class="param">"locations"</span>: [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"id"</span>: <span class="string">"8b2a..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"name"</span>: <span class="string">"Main Gate"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"assigned_areas"</span>: <span class="string">"Gate A, Gate B"</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+&nbsp;&nbsp;]<br>
+}</code>
+      </div>
+    </div>
+
+    <!-- Admin Locations Create -->
+    <div class="endpoint" id="admin-locations-create">
+      <span class="method post">POST</span>
+      <span class="path">/api/admin/locations</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Create a location for the admin organization.</p>
+
+      <h3>Request Body</h3>
+      <table>
+        <thead>
+          <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="param">name</td><td>string</td><td>Yes</td><td>Location name</td></tr>
+          <tr><td class="param">assigned_areas</td><td>string</td><td>No</td><td>Comma-separated areas</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Example Response</h3>
+      <div class="code-block">
+        <code>{<br>
+&nbsp;&nbsp;<span class="param">"message"</span>: <span class="string">"Location created successfully"</span>,<br>
+&nbsp;&nbsp;<span class="param">"location"</span>: {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"id"</span>: <span class="string">"8b2a..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"name"</span>: <span class="string">"Main Gate"</span><br>
+&nbsp;&nbsp;}<br>
+}</code>
+      </div>
+    </div>
+
+    <!-- Admin Locations Update -->
+    <div class="endpoint" id="admin-locations-update">
+      <span class="method patch">PATCH</span>
+      <span class="path">/api/admin/locations/:id</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Update location fields (<code>name</code> and/or <code>assigned_areas</code>) within the admin organization.</p>
+
+      <h3>Request Body</h3>
+      <table>
+        <thead>
+          <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="param">name</td><td>string</td><td>No</td><td>Updated location name (cannot be empty)</td></tr>
+          <tr><td class="param">assigned_areas</td><td>string</td><td>No</td><td>Updated areas list</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Example Response</h3>
+      <div class="code-block">
+        <code>{<br>
+&nbsp;&nbsp;<span class="param">"message"</span>: <span class="string">"Location updated successfully"</span>,<br>
+&nbsp;&nbsp;<span class="param">"location"</span>: {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"id"</span>: <span class="string">"8b2a..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="param">"name"</span>: <span class="string">"Rear Gate"</span><br>
+&nbsp;&nbsp;}<br>
+}</code>
+      </div>
+    </div>
+
+    <!-- Admin Locations Delete -->
+    <div class="endpoint" id="admin-locations-delete">
+      <span class="method delete">DELETE</span>
+      <span class="path">/api/admin/locations/:id</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Delete a location in the admin organization.</p>
+
+      <h3>Example Response</h3>
+      <div class="code-block">
+        <code>{<br>
+&nbsp;&nbsp;<span class="param">"message"</span>: <span class="string">"Location deleted successfully"</span>,<br>
+&nbsp;&nbsp;<span class="param">"id"</span>: <span class="string">"8b2a..."</span><br>
+}</code>
+      </div>
+    </div>
+
+    <h2 id="guard-operations">🛰️ Guard App APIs</h2>
+    <p style="color: #94a3b8; margin-bottom: 20px;">
+      Endpoints used by the guard page for assignments, patrol lifecycle, location tracking, and logs.
+    </p>
+
+    <div class="endpoint" id="guard-my-assignments-get">
+      <span class="method get">GET</span>
+      <span class="path">/api/my-assignments</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Fetch assignments for the authenticated guard.</p>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{<br>
+&nbsp;&nbsp;<span class="param">"assignments"</span>: [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="param">"id"</span>: <span class="string">"asg1"</span>, <span class="param">"user_id"</span>: <span class="string">"u1"</span>, <span class="param">"location"</span>: <span class="string">"loc1"</span>, <span class="param">"assigned_areas"</span>: <span class="string">"Gate A, Lobby"</span>, <span class="param">"start_time"</span>: <span class="string">"09:00"</span>, <span class="param">"end_time"</span>: <span class="string">"17:00"</span> }<br>
+&nbsp;&nbsp;]<br>
+}</code></div>
+    </div>
+
+    <div class="endpoint" id="guard-my-assignments-put">
+      <span class="method put">PUT</span>
+      <span class="path">/api/my-assignments</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Update the authenticated guard's assignment details.</p>
+      <h3>Request Body</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param">location</td><td>string</td><td>Yes</td><td>Location ID</td></tr>
+          <tr><td class="param">assigned_areas</td><td>string</td><td>Yes</td><td>Comma-separated areas</td></tr>
+          <tr><td class="param">start_time</td><td>string</td><td>Yes</td><td>Shift start time</td></tr>
+          <tr><td class="param">end_time</td><td>string</td><td>Yes</td><td>Shift end time</td></tr>
+        </tbody>
+      </table>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"message"</span>: <span class="string">"Assignment updated successfully"</span> }</code></div>
+    </div>
+
+    <div class="endpoint" id="guard-locations">
+      <span class="method get">GET</span>
+      <span class="path">/api/locations</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Fetch all locations in the authenticated user's organization.</p>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{<br>
+&nbsp;&nbsp;<span class="param">"locations"</span>: [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="param">"id"</span>: <span class="string">"loc1"</span>, <span class="param">"name"</span>: <span class="string">"Main Gate"</span>, <span class="param">"assigned_areas"</span>: <span class="string">"Gate A, Gate B"</span> }<br>
+&nbsp;&nbsp;]<br>
+}</code></div>
+    </div>
+
+    <div class="endpoint" id="guard-patrols-get">
+      <span class="method get">GET</span>
+      <span class="path">/api/patrols</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Fetch guard patrol history.</p>
+      <h3>Query Params</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param">limit</td><td>number</td><td>No</td><td>Max records (default: 10)</td></tr>
+          <tr><td class="param">sort</td><td>string</td><td>No</td><td>Sort order (default: <code>-start_time</code>)</td></tr>
+        </tbody>
+      </table>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"patrols"</span>: [ { <span class="param">"id"</span>: <span class="string">"p1"</span>, <span class="param">"status"</span>: <span class="string">"active"</span> } ] }</code></div>
+    </div>
+
+    <div class="endpoint" id="guard-patrols-post">
+      <span class="method post">POST</span>
+      <span class="path">/api/patrols</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Start a patrol session.</p>
+      <h3>Request Body</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param">start_time</td><td>string</td><td>Yes</td><td>Patrol start timestamp</td></tr>
+          <tr><td class="param">user_id</td><td>string</td><td>Yes</td><td>Guard user ID</td></tr>
+          <tr><td class="param">organization_id</td><td>string</td><td>No</td><td>Organization ID</td></tr>
+          <tr><td class="param">duration</td><td>number</td><td>No</td><td>Initial duration in minutes</td></tr>
+          <tr><td class="param">end_time</td><td>string</td><td>No</td><td>End time if already completed</td></tr>
+          <tr><td class="param">map</td><td>string</td><td>No</td><td>Serialized path data</td></tr>
+          <tr><td class="param">location_data</td><td>array</td><td>No</td><td>Location points (alternative to <code>map</code>)</td></tr>
+        </tbody>
+      </table>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"message"</span>: <span class="string">"Patrol started successfully"</span>, <span class="param">"data"</span>: { <span class="param">"id"</span>: <span class="string">"p1"</span>, <span class="param">"status"</span>: <span class="string">"active"</span> } }</code></div>
+    </div>
+
+    <div class="endpoint" id="guard-patrols-patch">
+      <span class="method patch">PATCH</span>
+      <span class="path">/api/patrols/:id</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Update patrol details, including ending a patrol by setting <code>end_time</code> and optionally <code>status</code>.</p>
+      <h3>Request Body</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param">duration</td><td>number</td><td>No</td><td>Patrol duration in minutes</td></tr>
+          <tr><td class="param">end_time</td><td>string</td><td>No</td><td>Patrol end timestamp</td></tr>
+          <tr><td class="param">map</td><td>string</td><td>No</td><td>Serialized route data</td></tr>
+          <tr><td class="param">location_data</td><td>array</td><td>No</td><td>Route points (mapped to <code>map</code>)</td></tr>
+          <tr><td class="param">status</td><td>string</td><td>No</td><td>Patrol state (e.g., active/completed)</td></tr>
+        </tbody>
+      </table>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"message"</span>: <span class="string">"Patrol updated successfully"</span>, <span class="param">"data"</span>: { <span class="param">"id"</span>: <span class="string">"p1"</span> } }</code></div>
+    </div>
+
+    <div class="endpoint" id="guard-patrols-location-patch">
+      <span class="method patch">PATCH</span>
+      <span class="path">/api/patrols/:id/location</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Append incremental GPS points to an active patrol route.</p>
+      <h3>Request Body</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param">location_data</td><td>array</td><td>Yes</td><td>Array of points: <code>{ latitude, longitude, timestamp }</code></td></tr>
+        </tbody>
+      </table>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"message"</span>: <span class="string">"Location updated successfully"</span>, <span class="param">"points_count"</span>: <span class="string">120</span> }</code></div>
+    </div>
+
+    <div class="endpoint" id="guard-logs-get">
+      <span class="method get">GET</span>
+      <span class="path">/api/logs</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Fetch logs created by the authenticated guard.</p>
+      <h3>Query Params</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param">limit</td><td>number</td><td>No</td><td>Max records (default: 50)</td></tr>
+          <tr><td class="param">sort</td><td>string</td><td>No</td><td>Sort order (default: <code>-timestamp</code>)</td></tr>
+        </tbody>
+      </table>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"logs"</span>: [ { <span class="param">"id"</span>: <span class="string">"l1"</span>, <span class="param">"title"</span>: <span class="string">"Checkpoint"</span> } ] }</code></div>
+    </div>
+
+    <div class="endpoint" id="guard-logs-post">
+      <span class="method post">POST</span>
+      <span class="path">/api/logs</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Create a new guard log entry with optional images and patrol linkage.</p>
+      <h3>Request Body</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param">title</td><td>string</td><td>Yes</td><td>Log title</td></tr>
+          <tr><td class="param">description</td><td>string</td><td>Yes</td><td>Log details</td></tr>
+          <tr><td class="param">category</td><td>string</td><td>Yes</td><td>One of: activity, unusual, incident, checkpoint, other</td></tr>
+          <tr><td class="param">images</td><td>string|array</td><td>No</td><td>Image data/URIs (commonly JSON string)</td></tr>
+          <tr><td class="param">patrol_id</td><td>string</td><td>No</td><td>Related patrol ID</td></tr>
+        </tbody>
+      </table>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"message"</span>: <span class="string">"Log created successfully"</span>, <span class="param">"data"</span>: { <span class="param">"id"</span>: <span class="string">"l1"</span> } }</code></div>
+    </div>
+
+    <h2 id="additional-apis">🧩 Additional APIs</h2>
+
+    <div class="endpoint" id="assignments-list">
+      <span class="method get">GET</span>
+      <span class="path">/api/assignments</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Fetch assignment records from backend storage.</p>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"assignments"</span>: [ { <span class="param">"id"</span>: <span class="string">"asg1"</span> } ] }</code></div>
+    </div>
+
+    <div class="endpoint" id="org-invite-codes">
+      <span class="method get">GET</span>
+      <span class="path">/api/organizations/invite-codes</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Return invite codes for registered organizations.</p>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"inviteCodes"</span>: [<span class="string">"ORG001"</span>, <span class="string">"ORG002"</span>] }</code></div>
+    </div>
+
+    <div class="endpoint" id="org-validate-invite-code">
+      <span class="method post">POST</span>
+      <span class="path">/api/organizations/validate-invite-code</span>
+      <span class="auth-badge">PUBLIC</span>
+      <p class="description">Validate whether an organization invite code exists.</p>
+      <h3>Request Body</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param">inviteCode</td><td>string</td><td>Yes</td><td>Organization invite code</td></tr>
+        </tbody>
+      </table>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"valid"</span>: <span class="string">true</span>, <span class="param">"message"</span>: <span class="string">"Invite code is valid"</span> }</code></div>
+    </div>
+
+    <div class="endpoint" id="admin-patrols-feed">
+      <span class="method get">GET</span>
+      <span class="path">/api/admin/patrols</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Admin patrol feed across all guards in organization, enriched with guard name and checkpoints.</p>
+      <h3>Query Params</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param">limit</td><td>number</td><td>No</td><td>Max records (default: 50)</td></tr>
+          <tr><td class="param">sort</td><td>string</td><td>No</td><td>Sort by timestamp (default: <code>-start_time</code>)</td></tr>
+        </tbody>
+      </table>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"patrols"</span>: [ { <span class="param">"id"</span>: <span class="string">"p1"</span>, <span class="param">"guard_name"</span>: <span class="string">"Jane Doe"</span> } ] }</code></div>
+    </div>
+
+    <div class="endpoint" id="admin-logs-feed">
+      <span class="method get">GET</span>
+      <span class="path">/api/admin/logs</span>
+      <span class="auth-badge">PROTECTED</span>
+      <p class="description">Admin logs feed across all guards in organization with location resolution.</p>
+      <h3>Query Params</h3>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="param">limit</td><td>number</td><td>No</td><td>Max records (default: 50)</td></tr>
+          <tr><td class="param">sort</td><td>string</td><td>No</td><td>Sort by timestamp (default: <code>-timestamp</code>)</td></tr>
+        </tbody>
+      </table>
+      <h3>Example Response</h3>
+      <div class="code-block"><code>{ <span class="param">"logs"</span>: [ { <span class="param">"id"</span>: <span class="string">"l1"</span>, <span class="param">"location"</span>: <span class="string">"Main Gate"</span> } ] }</code></div>
     </div>
 
     <h2 id="error-handling">⚠️ Error Handling</h2>
@@ -518,4 +977,3 @@ DB_PORT=5432</code>
   </div>
 </body>
 </html>
-

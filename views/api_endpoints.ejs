@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OmniWatch API Endpoints</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #e2e8f0;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container { max-width: 1100px; margin: 0 auto; padding: 40px 20px; }
+    header {
+      margin-bottom: 28px;
+      border-bottom: 1px solid #334155;
+      padding-bottom: 16px;
+    }
+    h1 { color: #fff; font-size: 2rem; margin-bottom: 6px; }
+    .subtitle { color: #94a3b8; }
+    h2 {
+      color: #fff;
+      margin: 28px 0 14px;
+      font-size: 1.2rem;
+      border-bottom: 1px solid #334155;
+      padding-bottom: 8px;
+    }
+    .endpoint-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+      gap: 12px;
+    }
+    .endpoint-link {
+      display: block;
+      text-decoration: none;
+      border: 1px solid #334155;
+      background: #1e293b;
+      border-radius: 10px;
+      padding: 12px;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .endpoint-link:hover {
+      border-color: #60a5fa;
+      transform: translateY(-2px);
+    }
+    .endpoint-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .method {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 0.75rem;
+      letter-spacing: 0.2px;
+    }
+    .get { background: #3b82f6; color: #fff; }
+    .post { background: #22c55e; color: #00140a; }
+    .put { background: #06b6d4; color: #001018; }
+    .patch { background: #a855f7; color: #fff; }
+    .delete { background: #ef4444; color: #fff; }
+    .path {
+      color: #e2e8f0;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 0.88rem;
+      word-break: break-all;
+    }
+    .desc {
+      color: #94a3b8;
+      font-size: 0.9rem;
+    }
+    .auth {
+      color: #fbbf24;
+      font-size: 0.78rem;
+      margin-top: 8px;
+      font-weight: 600;
+    }
+    .links {
+      margin-top: 28px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-block;
+      text-decoration: none;
+      color: #fff;
+      border: 1px solid #334155;
+      background: #1e293b;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-weight: 600;
+    }
+    .btn:hover { border-color: #60a5fa; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>API Endpoints</h1>
+      <p class="subtitle">Click any endpoint to open its detailed documentation section.</p>
+    </header>
+
+    <h2>Authentication</h2>
+    <div class="endpoint-list">
+      <a class="endpoint-link" href="/documentation#register">
+        <div class="endpoint-head"><span class="method post">POST</span><span class="path">/api/register</span></div>
+        <div class="desc">Register a new user account.</div>
+        <div class="auth">PUBLIC</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#login">
+        <div class="endpoint-head"><span class="method post">POST</span><span class="path">/api/login</span></div>
+        <div class="desc">Authenticate and receive a JWT token.</div>
+        <div class="auth">PUBLIC</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#logout">
+        <div class="endpoint-head"><span class="method post">POST</span><span class="path">/api/logout</span></div>
+        <div class="desc">Logout and clear session.</div>
+        <div class="auth">PUBLIC</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#me">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/me</span></div>
+        <div class="desc">Fetch current authenticated user profile.</div>
+        <div class="auth">SESSION / JWT</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#verify-token">
+        <div class="endpoint-head"><span class="method post">POST</span><span class="path">/api/verify-token</span></div>
+        <div class="desc">Validate a JWT token.</div>
+        <div class="auth">PUBLIC</div>
+      </a>
+    </div>
+
+    <h2>Guard Operations</h2>
+    <div class="endpoint-list">
+      <a class="endpoint-link" href="/documentation#guard-my-assignments-get">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/my-assignments</span></div>
+        <div class="desc">Get guard assignment(s).</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#guard-my-assignments-put">
+        <div class="endpoint-head"><span class="method put">PUT</span><span class="path">/api/my-assignments</span></div>
+        <div class="desc">Update guard assignment.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#guard-locations">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/locations</span></div>
+        <div class="desc">Get organization locations for authenticated guard.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#guard-patrols-get">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/patrols</span></div>
+        <div class="desc">Get guard patrol history.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#guard-patrols-post">
+        <div class="endpoint-head"><span class="method post">POST</span><span class="path">/api/patrols</span></div>
+        <div class="desc">Start patrol.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#guard-patrols-patch">
+        <div class="endpoint-head"><span class="method patch">PATCH</span><span class="path">/api/patrols/:id</span></div>
+        <div class="desc">Update / end patrol.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#guard-patrols-location-patch">
+        <div class="endpoint-head"><span class="method patch">PATCH</span><span class="path">/api/patrols/:id/location</span></div>
+        <div class="desc">Append patrol location points.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#guard-logs-get">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/logs</span></div>
+        <div class="desc">Get guard logs.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#guard-logs-post">
+        <div class="endpoint-head"><span class="method post">POST</span><span class="path">/api/logs</span></div>
+        <div class="desc">Create guard log entry.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+    </div>
+
+    <h2>Admin Operations</h2>
+    <div class="endpoint-list">
+      <a class="endpoint-link" href="/documentation#admin-dashboard">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/admin/dashboard</span></div>
+        <div class="desc">Admin overview stats.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#admin-guards">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/admin/guards</span></div>
+        <div class="desc">Get guards with assignment + online status.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#admin-remove-guard">
+        <div class="endpoint-head"><span class="method delete">DELETE</span><span class="path">/api/admin/guards/:id</span></div>
+        <div class="desc">Delete guard and related records.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#admin-create-assignment">
+        <div class="endpoint-head"><span class="method post">POST</span><span class="path">/api/admin/assignments</span></div>
+        <div class="desc">Create assignment for a guard.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#admin-patrols-feed">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/admin/patrols</span></div>
+        <div class="desc">Admin patrol feed for organization.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#admin-logs-feed">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/admin/logs</span></div>
+        <div class="desc">Admin logs feed for organization.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#admin-locations-list">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/admin/locations</span></div>
+        <div class="desc">List organization locations.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#admin-locations-create">
+        <div class="endpoint-head"><span class="method post">POST</span><span class="path">/api/admin/locations</span></div>
+        <div class="desc">Create location.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#admin-locations-update">
+        <div class="endpoint-head"><span class="method patch">PATCH</span><span class="path">/api/admin/locations/:id</span></div>
+        <div class="desc">Update location.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#admin-locations-delete">
+        <div class="endpoint-head"><span class="method delete">DELETE</span><span class="path">/api/admin/locations/:id</span></div>
+        <div class="desc">Delete location.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+    </div>
+
+    <h2>Other APIs</h2>
+    <div class="endpoint-list">
+      <a class="endpoint-link" href="/documentation#assignments-list">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/assignments</span></div>
+        <div class="desc">List assignments (generic endpoint).</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#org-invite-codes">
+        <div class="endpoint-head"><span class="method get">GET</span><span class="path">/api/organizations/invite-codes</span></div>
+        <div class="desc">List organization invite codes.</div>
+        <div class="auth">PROTECTED</div>
+      </a>
+      <a class="endpoint-link" href="/documentation#org-validate-invite-code">
+        <div class="endpoint-head"><span class="method post">POST</span><span class="path">/api/organizations/validate-invite-code</span></div>
+        <div class="desc">Validate invite code for signup flow.</div>
+        <div class="auth">PUBLIC</div>
+      </a>
+    </div>
+
+    <div class="links">
+      <a href="/" class="btn">← Back Home</a>
+      <a href="/documentation" class="btn">📖 Full Documentation</a>
+    </div>
+  </div>
+</body>
+</html>

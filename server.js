@@ -475,16 +475,47 @@ app.post('/api/logout', (req, res) => {
  * GET /api/me
  * Get current user session
  */
-app.get('/api/me', (req, res) => {
+app.get('/api/me', async (req, res) => {
   if (req.session && req.session.user) {
-    res.json({ 
+    const sessionUser = req.session.user;
+    let company = '';
+    let organization = null;
+
+    try {
+      if (sessionUser.invite_code) {
+        const orgResponse = await query(
+          `/items/organizations?filter[invite_code][_eq]=${encodeURIComponent(sessionUser.invite_code)}&fields=*&limit=1`
+        );
+        const org = (orgResponse.data.data || [])[0] || null;
+        organization = org;
+        company =
+          org?.name ||
+          org?.organization ||
+          org?.organization_name ||
+          org?.company_name ||
+          org?.company ||
+          org?.title ||
+          org?.label ||
+          org?.invite_code ||
+          sessionUser.invite_code ||
+          '';
+      }
+    } catch (orgError) {
+      console.error('Error fetching organization for /api/me:', orgError);
+    }
+
+    res.json({
       authenticated: true,
-      user: req.session.user 
+      user: {
+        ...sessionUser,
+        company,
+        organization,
+      }
     });
   } else {
-    res.status(401).json({ 
+    res.status(401).json({
       authenticated: false,
-      message: 'Not authenticated' 
+      message: 'Not authenticated'
     });
   }
 });
@@ -493,10 +524,41 @@ app.get('/api/me', (req, res) => {
  * GET /api/me (with JWT)
  * Get current user from JWT token
  */
-app.get('/api/me', verifyTokenMiddleware, (req, res) => {
+app.get('/api/me', verifyTokenMiddleware, async (req, res) => {
+  const tokenUser = req.user;
+  let company = '';
+  let organization = null;
+
+  try {
+    if (tokenUser.invite_code) {
+      const orgResponse = await query(
+        `/items/organizations?filter[invite_code][_eq]=${encodeURIComponent(tokenUser.invite_code)}&fields=*&limit=1`
+      );
+      const org = (orgResponse.data.data || [])[0] || null;
+      organization = org;
+      company =
+        org?.name ||
+        org?.organization ||
+        org?.organization_name ||
+        org?.company_name ||
+        org?.company ||
+        org?.title ||
+        org?.label ||
+        org?.invite_code ||
+        tokenUser.invite_code ||
+        '';
+    }
+  } catch (orgError) {
+    console.error('Error fetching organization for /api/me (JWT):', orgError);
+  }
+
   res.json({
     authenticated: true,
-    user: req.user,
+    user: {
+      ...tokenUser,
+      company,
+      organization,
+    },
   });
 });
 
@@ -558,6 +620,10 @@ app.get('/', (req, res) => {
 
 app.get('/documentation', (req, res) => {
   res.render('documentation');
+});
+
+app.get('/api-endpoints', (req, res) => {
+  res.render('api_endpoints');
 });
 
 // ============================================
@@ -658,13 +724,664 @@ app.get('/api/patrols', verifyTokenMiddleware, async (req, res) => {
 });
 
 /**
+ * GET /api/admin/guards
+ * Get all guards for the admin's organization
+ * Requires authentication and returns guards with matching invite_code
+ */
+app.get('/api/admin/guards', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const inviteCode = req.user.invite_code;
+
+    // console.log('Invite code', inviteCode)
+
+    if (!inviteCode) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'No organization invite code found'
+      });
+    }
+
+    // Fetch users with role='guard' and matching invite_code
+    const response = await query(`/items/users?filter[role][_eq]=guard&filter[invite_code][_eq]=${inviteCode}`);
+    const guards = response.data.data || [];
+
+    if (!guards.length) {
+      return res.json({ guards: [] });
+    }
+
+    // Load organization locations once so assignment.location IDs can be resolved to names.
+    const locationsResponse = await query(`/items/locations?filter[organization][_eq]=${inviteCode}&fields=id,name`);
+    const locations = locationsResponse.data.data || [];
+    const locationsById = new Map();
+    for (const loc of locations) {
+      locationsById.set(loc.id, loc.name);
+    }
+
+    // For each guard, get latest assignment by user_id and enrich response fields.
+    const enrichedGuards = [];
+    for (const guard of guards) {
+      let assignment = null;
+      let latestPatrol = null;
+      try {
+        const assignmentsResponse = await query(
+          `/items/assignments?filter[user_id][_eq]=${guard.id}&sort=-date_updated&limit=1`
+        );
+        assignment = (assignmentsResponse.data.data || [])[0] || null;
+      } catch (assignmentError) {
+        console.error(`Error fetching assignment for guard ${guard.id}:`, assignmentError);
+      }
+
+      try {
+        const patrolResponse = await query(
+          `/items/patrols?filter[user_id][_eq]=${guard.id}&sort=-start_time&limit=1`
+        );
+        latestPatrol = (patrolResponse.data.data || [])[0] || null;
+      } catch (patrolError) {
+        console.error(`Error fetching latest patrol for guard ${guard.id}:`, patrolError);
+      }
+
+      const locationId = assignment?.location || '';
+      const locationName = locationId ? (locationsById.get(locationId) || locationId) : 'Not assigned';
+      const isOnActivePatrol = latestPatrol && latestPatrol.status === 'active' && !latestPatrol.end_time;
+
+      let lastSeen = guard.last_access || null;
+      let lastSeenDisplay = 'Never';
+      if (isOnActivePatrol) {
+        lastSeenDisplay = 'Online (Currently on patrol)';
+      } else if (latestPatrol?.end_time) {
+        lastSeen = latestPatrol.end_time;
+        lastSeenDisplay = latestPatrol.end_time;
+      } else if (guard.last_access) {
+        lastSeenDisplay = guard.last_access;
+      }
+
+      enrichedGuards.push({
+        ...guard,
+        location: locationName,
+        location_id: locationId,
+        assigned_areas: assignment?.assigned_areas || '',
+        operating_hours_start: assignment?.start_time || '',
+        operating_hours_end: assignment?.end_time || '',
+        last_seen: lastSeen,
+        last_seen_display: lastSeenDisplay,
+        is_online: Boolean(isOnActivePatrol),
+      });
+    }
+
+    res.json({
+      guards: enrichedGuards
+    });
+  } catch (error) {
+    console.error('Error fetching guards:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to fetch guards'
+    });
+  }
+});
+
+/**
+ * POST /api/admin/assignments
+ * Create a new assignment for a guard in the admin's organization
+ * Body: { user_id, location, assigned_areas, start_time, end_time }
+ */
+app.post('/api/admin/assignments', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const inviteCode = req.user.invite_code;
+    const { user_id, location, assigned_areas, start_time, end_time } = req.body;
+
+    if (!inviteCode) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'No organization invite code found',
+      });
+    }
+
+    if (!user_id || !location || !assigned_areas || !start_time || !end_time) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        message: 'user_id, location, assigned_areas, start_time, and end_time are required',
+      });
+    }
+
+    const guardResponse = await query(
+      `/items/users?filter[id][_eq]=${encodeURIComponent(user_id)}&filter[role][_eq]=guard&filter[invite_code][_eq]=${encodeURIComponent(inviteCode)}&limit=1`
+    );
+    const guard = (guardResponse.data.data || [])[0];
+    if (!guard) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Guard not found in your organization',
+      });
+    }
+
+    const locationResponse = await query(
+      `/items/locations?filter[id][_eq]=${encodeURIComponent(location)}&filter[organization][_eq]=${encodeURIComponent(inviteCode)}&limit=1`
+    );
+    const organizationLocation = (locationResponse.data.data || [])[0];
+    if (!organizationLocation) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Location not found in your organization',
+      });
+    }
+
+    const assignmentData = {
+      user_id: String(user_id).trim(),
+      location: String(location).trim(),
+      assigned_areas: String(assigned_areas).trim(),
+      start_time: String(start_time).trim(),
+      end_time: String(end_time).trim(),
+      date_updated: new Date().toISOString(),
+    };
+
+    const response = await query('/items/assignments', {
+      method: 'POST',
+      data: assignmentData,
+    });
+
+    res.status(201).json({
+      message: 'Assignment created successfully',
+      assignment: response.data.data,
+    });
+  } catch (error) {
+    console.error('Error creating admin assignment:', error);
+    const statusCode = error.response?.status || 500;
+    res.status(statusCode).json({
+      error: 'Internal Server Error',
+      message: 'Failed to create assignment',
+      details: error.response?.data || error.message,
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/guards/:id
+ * Remove a guard from the admin's organization and cascade-delete related data.
+ */
+app.delete('/api/admin/guards/:id', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const inviteCode = req.user.invite_code;
+    const { id } = req.params;
+
+    if (!inviteCode) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'No organization invite code found',
+      });
+    }
+
+    const guardResponse = await query(
+      `/items/users?filter[id][_eq]=${encodeURIComponent(id)}&filter[role][_eq]=guard&filter[invite_code][_eq]=${encodeURIComponent(inviteCode)}&limit=1`
+    );
+    const guard = (guardResponse.data.data || [])[0];
+    if (!guard) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Guard not found in your organization',
+      });
+    }
+
+    const deleteRelatedRecords = async (collection) => {
+      const listResponse = await query(
+        `/items/${collection}?filter[user_id][_eq]=${encodeURIComponent(id)}&fields=id&limit=-1`
+      );
+      const items = listResponse.data.data || [];
+      for (const item of items) {
+        await query(`/items/${collection}/${encodeURIComponent(item.id)}`, {
+          method: 'DELETE',
+        });
+      }
+      return items.length;
+    };
+
+    const deletedAssignments = await deleteRelatedRecords('assignments');
+    const deletedLogs = await deleteRelatedRecords('logs');
+    const deletedPatrols = await deleteRelatedRecords('patrols');
+
+    await query(`/items/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+
+    res.json({
+      message: 'Guard removed successfully',
+      deleted: {
+        assignments: deletedAssignments,
+        logs: deletedLogs,
+        patrols: deletedPatrols,
+      },
+    });
+  } catch (error) {
+    console.error('Error deleting guard:', error);
+    const statusCode = error.response?.status || 500;
+    res.status(statusCode).json({
+      error: 'Internal Server Error',
+      message: 'Failed to remove guard',
+      details: error.response?.data || error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/admin/patrols
+ * Get all patrols for the admin's organization
+ * Query params: limit (optional), sort (optional)
+ */
+app.get('/api/admin/patrols', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const inviteCode = req.user.invite_code;
+    const limit = req.query.limit || 50;
+    const sort = req.query.sort || '-start_time';
+
+    // First get all guards for this organization
+    const guardsResponse = await query(`/items/users?filter[role][_eq]=guard&filter[invite_code][_eq]=${inviteCode}&fields=id`);
+    const guards = guardsResponse.data.data;
+
+    if (!guards || guards.length === 0) {
+      return res.json({ patrols: [] });
+    }
+
+    // Get guard IDs
+    const guardIds = guards.map(g => g.id);
+
+    // Fetch patrols for all guards in the organization
+    // Directus doesn't support 'in' filter, so we'll fetch each guard's patrols
+    let allPatrols = [];
+    for (const guardId of guardIds) {
+      try {
+        const patrolResponse = await query(`/items/patrols?filter[user_id][_eq]=${guardId}&sort=${sort}&limit=${limit}`);
+        if (patrolResponse.data.data) {
+          allPatrols = [...allPatrols, ...patrolResponse.data.data];
+        }
+      } catch (patrolError) {
+        console.error(`Error fetching patrols for guard ${guardId}:`, patrolError);
+      }
+    }
+
+    // Sort combined patrols by start_time
+    allPatrols.sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
+
+    // Limit results
+    const limitedPatrols = allPatrols.slice(0, parseInt(limit));
+
+    // Build location lookup so assignment location IDs can be resolved to names.
+    const locationsById = new Map();
+    try {
+      const locationsResponse = await query(`/items/locations?filter[organization][_eq]=${inviteCode}&fields=id,name`);
+      const locations = locationsResponse.data.data || [];
+      for (const location of locations) {
+        locationsById.set(location.id, location.name);
+      }
+    } catch (locationError) {
+      console.error('Error fetching locations for patrol enrichment:', locationError);
+    }
+
+    // Enrich each patrol using its user_id:
+    // 1) fetch user -> guard_name
+    // 2) fetch assignment by user_id -> assigned areas and assignment location
+    const enrichedPatrols = [];
+    for (const patrol of limitedPatrols) {
+      const guardId = patrol.user_id;
+      let guard = null;
+      let assignment = null;
+
+      try {
+        const guardResponse = await query(`/items/users/${guardId}?fields=id,first_name,last_name`);
+        guard = guardResponse?.data?.data || null;
+      } catch (guardError) {
+        console.error(`Error fetching guard ${guardId} for patrol ${patrol.id}:`, guardError);
+      }
+
+      try {
+        const assignmentResponse = await query(
+          `/items/assignments?filter[user_id][_eq]=${guardId}&sort=-date_updated&limit=1`
+        );
+        assignment = (assignmentResponse.data.data || [])[0] || null;
+      } catch (assignmentError) {
+        console.error(`Error fetching assignment for guard ${guardId}:`, assignmentError);
+      }
+
+      const resolvedLocationName = assignment?.location ? (locationsById.get(assignment.location) || assignment.location) : null;
+      const guardName = guard ? `${guard.first_name || ''} ${guard.last_name || ''}`.trim() : '';
+      const assignmentAreas = assignment?.assigned_areas || '';
+      const assignmentCheckpoints = assignmentAreas
+        ? assignmentAreas.split(',').map((area) => area.trim()).filter(Boolean)
+        : [];
+
+      enrichedPatrols.push({
+        ...patrol,
+        guard_name: guardName || patrol.guard_name || 'Unknown Guard',
+        assigned_areas: assignmentAreas || patrol.assigned_areas || '',
+        location: patrol.location || resolvedLocationName || 'Unknown Location',
+        checkpoints: assignmentCheckpoints,
+      });
+    }
+
+    res.json({
+      patrols: enrichedPatrols
+    });
+  } catch (error) {
+    console.error('Error fetching admin patrols:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to fetch patrols'
+    });
+  }
+});
+
+/**
+ * GET /api/admin/locations
+ * Get all locations for the admin's organization
+ */
+app.get('/api/admin/locations', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const inviteCode = req.user.invite_code;
+
+    if (!inviteCode) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'No organization invite code found'
+      });
+    }
+
+    // Fetch locations where organization matches invite_code
+    const response = await query(`/items/locations?filter[organization][_eq]=${inviteCode}`);
+
+    res.json({
+      locations: response.data.data
+    });
+  } catch (error) {
+    console.error('Error fetching locations:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to fetch locations'
+    });
+  }
+});
+
+/**
+ * POST /api/admin/locations
+ * Create a location for the admin's organization
+ * Body: { name, assigned_areas? }
+ */
+app.post('/api/admin/locations', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const inviteCode = req.user.invite_code;
+    const { name, assigned_areas } = req.body;
+
+    if (!inviteCode) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'No organization invite code found',
+      });
+    }
+
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        message: 'Location name is required',
+      });
+    }
+
+    const locationData = {
+      name: String(name).trim(),
+      assigned_areas: assigned_areas ? String(assigned_areas).trim() : '',
+      organization: inviteCode,
+    };
+
+    const response = await query('/items/locations', {
+      method: 'POST',
+      data: locationData,
+    });
+
+    res.status(201).json({
+      message: 'Location created successfully',
+      location: response.data.data,
+    });
+  } catch (error) {
+    console.error('Error creating location:', error);
+    const statusCode = error.response?.status || 500;
+    res.status(statusCode).json({
+      error: 'Internal Server Error',
+      message: 'Failed to create location',
+      details: error.response?.data || error.message,
+    });
+  }
+});
+
+/**
+ * PATCH /api/admin/locations/:id
+ * Update a location for the admin's organization
+ * Body: { name?, assigned_areas? }
+ */
+app.patch('/api/admin/locations/:id', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const inviteCode = req.user.invite_code;
+    const { id } = req.params;
+    const { name, assigned_areas } = req.body;
+
+    if (!inviteCode) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'No organization invite code found',
+      });
+    }
+
+    const existingResponse = await query(
+      `/items/locations?filter[id][_eq]=${encodeURIComponent(id)}&filter[organization][_eq]=${encodeURIComponent(inviteCode)}&limit=1`
+    );
+    const existingLocation = (existingResponse.data.data || [])[0];
+    if (!existingLocation) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Location not found',
+      });
+    }
+
+    const updateData = {};
+    if (name !== undefined) {
+      if (!String(name).trim()) {
+        return res.status(400).json({
+          error: 'Validation Error',
+          message: 'Location name cannot be empty',
+        });
+      }
+      updateData.name = String(name).trim();
+    }
+    if (assigned_areas !== undefined) {
+      updateData.assigned_areas = String(assigned_areas).trim();
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        message: 'No fields provided to update',
+      });
+    }
+
+    const response = await query(`/items/locations/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      data: updateData,
+    });
+
+    res.json({
+      message: 'Location updated successfully',
+      location: response.data.data,
+    });
+  } catch (error) {
+    console.error('Error updating location:', error);
+    const statusCode = error.response?.status || 500;
+    res.status(statusCode).json({
+      error: 'Internal Server Error',
+      message: 'Failed to update location',
+      details: error.response?.data || error.message,
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/locations/:id
+ * Delete a location for the admin's organization
+ */
+app.delete('/api/admin/locations/:id', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const inviteCode = req.user.invite_code;
+    const { id } = req.params;
+
+    if (!inviteCode) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'No organization invite code found',
+      });
+    }
+
+    const existingResponse = await query(
+      `/items/locations?filter[id][_eq]=${encodeURIComponent(id)}&filter[organization][_eq]=${encodeURIComponent(inviteCode)}&limit=1`
+    );
+    const existingLocation = (existingResponse.data.data || [])[0];
+    if (!existingLocation) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Location not found',
+      });
+    }
+
+    await query(`/items/locations/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+
+    res.json({
+      message: 'Location deleted successfully',
+      id,
+    });
+  } catch (error) {
+    console.error('Error deleting location:', error);
+    const statusCode = error.response?.status || 500;
+    res.status(statusCode).json({
+      error: 'Internal Server Error',
+      message: 'Failed to delete location',
+      details: error.response?.data || error.message,
+    });
+  }
+});
+
+/**
+ * Shared handler for admin logs endpoint.
+ */
+const getAdminLogsHandler = async (req, res) => {
+  try {
+    const inviteCode = req.user.invite_code;
+    const limit = req.query.limit || 50;
+    const sort = req.query.sort || '-timestamp';
+
+    // First get all guards for this organization
+    const guardsResponse = await query(`/items/users?filter[role][_eq]=guard&filter[invite_code][_eq]=${inviteCode}&fields=id`);
+    const guards = guardsResponse.data.data;
+
+    if (!guards || guards.length === 0) {
+      return res.json({ logs: [] });
+    }
+
+    // Get guard IDs
+    const guardIds = guards.map(g => g.id);
+
+    // Fetch logs for all guards in the organization
+    let allLogs = [];
+    for (const guardId of guardIds) {
+      try {
+        const logResponse = await query(`/items/logs?filter[user_id][_eq]=${guardId}&sort=${sort}&limit=${limit}`);
+        if (logResponse.data.data) {
+          allLogs = [...allLogs, ...logResponse.data.data];
+        }
+      } catch (logError) {
+        console.error(`Error fetching logs for guard ${guardId}:`, logError);
+      }
+    }
+
+    // Sort combined logs by timestamp
+    allLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    // Limit results
+    const limitedLogs = allLogs.slice(0, parseInt(limit));
+
+    // Step 3 (minimal): resolve log location from user -> assignment -> location name.
+    const locationsById = new Map();
+    try {
+      const locationsResponse = await query(`/items/locations?filter[organization][_eq]=${inviteCode}&fields=id,name`);
+      const locations = locationsResponse.data.data || [];
+      for (const location of locations) {
+        locationsById.set(location.id, location.name);
+      }
+    } catch (locationError) {
+      console.error('Error fetching locations for admin logs location mapping:', locationError);
+    }
+
+    const assignmentByUserId = new Map();
+    for (const guardId of guardIds) {
+      try {
+        const assignmentResponse = await query(
+          `/items/assignments?filter[user_id][_eq]=${guardId}&sort=-date_updated&limit=1`
+        );
+        assignmentByUserId.set(guardId, (assignmentResponse.data.data || [])[0] || null);
+      } catch (assignmentError) {
+        console.error(`Error fetching assignment for guard ${guardId}:`, assignmentError);
+        assignmentByUserId.set(guardId, null);
+      }
+    }
+
+    const logsWithResolvedLocation = limitedLogs.map((log) => {
+      const assignment = assignmentByUserId.get(log.user_id);
+      const resolvedLocation = assignment?.location
+        ? (locationsById.get(assignment.location) || assignment.location)
+        : null;
+
+      return {
+        ...log,
+        location: log.location || resolvedLocation || 'Unknown Location',
+      };
+    });
+
+    res.json({
+      logs: logsWithResolvedLocation
+    });
+  } catch (error) {
+    console.error('Error fetching admin logs:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to fetch logs'
+    });
+  }
+};
+
+/**
+ * GET /api/admin/logs
+ * Get all logs for the admin's organization
+ * Query params: limit (optional), sort (optional)
+ */
+app.get('/api/admin/logs', verifyTokenMiddleware, getAdminLogsHandler);
+
+/**
+ * Normalize map payloads before persisting.
+ * Supports stringified JSON, arrays, and objects.
+ */
+const normalizeMapValue = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch (_error) {
+    return null;
+  }
+};
+
+/**
  * POST /api/patrols
  * Create a new patrol
- * Body: { start_time, user_id, organization_id }
+ * Body: { start_time, user_id, organization_id, duration?, end_time?, map? }
  */
 app.post('/api/patrols', verifyTokenMiddleware, async (req, res) => {
   try {
-    const { start_time, user_id, organization_id } = req.body;
+    const { start_time, user_id, organization_id, duration, end_time, map, location_data } = req.body;
 
     // Validate required fields
     if (!start_time || !user_id) {
@@ -679,6 +1396,9 @@ app.post('/api/patrols', verifyTokenMiddleware, async (req, res) => {
       start_time,
       user_id,
       organization_id: organization_id || null,
+      duration: typeof duration === 'number' ? duration : null,
+      end_time: end_time || null,
+      map: normalizeMapValue(map !== undefined ? map : location_data),
       status: 'active',
     };
 
@@ -703,21 +1423,35 @@ app.post('/api/patrols', verifyTokenMiddleware, async (req, res) => {
 /**
  * PATCH /api/patrols/:id
  * Update a patrol (e.g., end time, location data)
- * Body: { end_time, location_data, status }
+ * Body: { duration?, start_time?, end_time?, map?, location_data?, status? }
  */
 app.patch('/api/patrols/:id', verifyTokenMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    const { end_time, location_data, status } = req.body;
+    // console.log("Param id:", id)
+    const {
+      duration,
+      end_time,
+      map,
+      location_data,
+      status
+    } = req.body;
 
-    // Build update data
+    // console.log("Data body:", req.body)
+
+    // Build update data - use 'map' field as per Directus collection schema
     const updateData = {};
     
+    if (typeof duration === 'number') {
+      updateData.duration = duration;
+    }
     if (end_time) {
       updateData.end_time = end_time;
     }
-    if (location_data) {
-      updateData.location_data = location_data;
+    if (map) {
+      updateData.map = normalizeMapValue(map);
+    } else if (location_data) {
+      updateData.map = normalizeMapValue(location_data);
     }
     if (status) {
       updateData.status = status;
@@ -728,11 +1462,35 @@ app.patch('/api/patrols/:id', verifyTokenMiddleware, async (req, res) => {
       updateData.status = 'completed';
     }
 
-    // Update patrol in Directus
-    const response = await query(`/items/patrols/${id}`, {
-      method: 'PATCH',
-      data: updateData,
-    });
+    // Update patrol in Directus. If duration is rejected by schema/permissions,
+    // retry without duration so patrol completion still gets recorded.
+    let response;
+    try {
+      response = await query(`/items/patrols/${id}`, {
+        method: 'PATCH',
+        data: updateData,
+      });
+    } catch (updateError) {
+      const hasDuration = Object.prototype.hasOwnProperty.call(updateData, 'duration');
+      if (!hasDuration) {
+        throw updateError;
+      }
+
+      const fallbackData = { ...updateData };
+      delete fallbackData.duration;
+
+      response = await query(`/items/patrols/${id}`, {
+        method: 'PATCH',
+        data: fallbackData,
+      });
+
+      return res.json({
+        message: 'Patrol updated, but duration was not persisted',
+        warning: 'duration_not_saved',
+        data: response.data.data,
+        details: updateError.response?.data || updateError.message,
+      });
+    }
 
     res.json({
       message: 'Patrol updated successfully',
@@ -740,17 +1498,194 @@ app.patch('/api/patrols/:id', verifyTokenMiddleware, async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating patrol:', error);
-    res.status(500).json({
+    const statusCode = error.response?.status || 500;
+    res.status(statusCode).json({
       error: 'Internal Server Error',
-      message: 'Failed to update patrol'
+      message: 'Failed to update patrol',
+      details: error.response?.data || error.message
+    });
+  }
+});
+
+/**
+ * PATCH /api/patrols/:id/location
+ * Update patrol location incrementally (append new points to existing map data)
+ * Body: { location_data: [{ latitude, longitude, timestamp }, ...] }
+ * This endpoint fetches existing map data, appends new points, and saves back
+ */
+app.patch('/api/patrols/:id/location', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { location_data } = req.body;
+
+    if (!location_data || !Array.isArray(location_data)) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        message: 'location_data array is required'
+      });
+    }
+
+    // Fetch existing patrol to get current map data
+    const patrolResponse = await query(`/items/patrols/${id}`);
+    
+    if (!patrolResponse.data.data) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Patrol not found'
+      });
+    }
+
+    const existingMapData = patrolResponse.data.data.map;
+    let existingLocations = [];
+
+    // Parse existing map data if it exists
+    if (existingMapData) {
+      if (Array.isArray(existingMapData)) {
+        existingLocations = existingMapData;
+      } else if (typeof existingMapData === 'string') {
+        const trimmedMap = existingMapData.trim();
+        if (trimmedMap === '[object Object]') {
+          existingLocations = [];
+        } else {
+          try {
+            existingLocations = JSON.parse(existingMapData);
+            if (!Array.isArray(existingLocations)) {
+              existingLocations = [];
+            }
+          } catch (parseError) {
+            console.error('Error parsing existing map data:', parseError);
+            existingLocations = [];
+          }
+        }
+      } else if (typeof existingMapData === 'object') {
+        if (Array.isArray(existingMapData.location_data)) {
+          existingLocations = existingMapData.location_data;
+        } else {
+          existingLocations = [existingMapData];
+        }
+      }
+    }
+
+    // Append new location points
+    const updatedLocations = [...existingLocations, ...location_data];
+
+    // Update patrol with new map data
+    const updateData = {
+      map: JSON.stringify(updatedLocations)
+    };
+
+    const response = await query(`/items/patrols/${id}`, {
+      method: 'PATCH',
+      data: updateData
+    });
+
+    res.json({
+      message: 'Location updated successfully',
+      data: response.data.data,
+      points_count: updatedLocations.length
+    });
+  } catch (error) {
+    console.error('Error updating patrol location:', error);
+    const statusCode = error.response?.status || 500;
+    res.status(statusCode).json({
+      error: 'Internal Server Error',
+      message: 'Failed to update patrol location',
+      details: error.response?.data || error.message
     });
   }
 });
 
 // ============================================
-// START SERVER
+// LOGS ROUTES
 // ============================================
 
+/**
+ * GET /api/logs
+ * Get all logs for the logged-in guard
+ * Query params: limit (optional), sort (optional)
+ */
+app.get('/api/logs', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = req.query.limit || 50;
+    const sort = req.query.sort || '-timestamp';
+
+    // Fetch logs for this guard from Directus
+    const response = await query(`/items/logs?filter[user_id][_eq]=${userId}&sort=${sort}&limit=${limit}`);
+
+    res.json({
+      logs: response.data.data
+    });
+  } catch (error) {
+    console.error('Error fetching logs:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to fetch logs'
+    });
+  }
+});
+
+/**
+ * POST /api/logs
+ * Create a new log entry
+ * Body: { title, description, category, images?, patrol_id? }
+ */
+app.post('/api/logs', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { title, description, category, images, patrol_id } = req.body;
+
+    // console.log("Body:", req.body)
+
+    // Validate required fields
+    if (!title || !description || !category) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        message: 'title, description, and category are required'
+      });
+    }
+
+    // Validate category
+    const validCategories = ['activity', 'unusual', 'incident', 'checkpoint', 'other'];
+    if (!validCategories.includes(category)) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        message: 'category must be one of: activity, unusual, incident, checkpoint, other'
+      });
+    }
+
+    // Create log in Directus
+    const logData = {
+      title,
+      description,
+      category,
+      user_id: userId,
+      patrol_id: patrol_id || null,
+      images: images || null,
+      timestamp: new Date().toISOString(),
+    };
+
+    const response = await query('/items/logs', {
+      method: 'POST',
+      data: logData,
+    });
+
+    res.status(201).json({
+      message: 'Log created successfully',
+      data: response.data.data
+    });
+  } catch (error) {
+    console.error('Error creating log:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to create log'
+    });
+  }
+});
+
+ // ============================================
+ // START SERVER
+ // ============================================
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📱 OmniWatch API ready at http://localhost:${PORT}/api`);
