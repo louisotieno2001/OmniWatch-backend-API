@@ -473,66 +473,37 @@ app.post('/api/logout', (req, res) => {
 
 /**
  * GET /api/me
- * Get current user session
+ * Get current user from session or JWT token
  */
 app.get('/api/me', async (req, res) => {
-  if (req.session && req.session.user) {
-    const sessionUser = req.session.user;
-    let company = '';
-    let organization = null;
+  let currentUser = req.session?.user || null;
 
-    try {
-      if (sessionUser.invite_code) {
-        const orgResponse = await query(
-          `/items/organizations?filter[invite_code][_eq]=${encodeURIComponent(sessionUser.invite_code)}&fields=*&limit=1`
-        );
-        const org = (orgResponse.data.data || [])[0] || null;
-        organization = org;
-        company =
-          org?.name ||
-          org?.organization ||
-          org?.organization_name ||
-          org?.company_name ||
-          org?.company ||
-          org?.title ||
-          org?.label ||
-          org?.invite_code ||
-          sessionUser.invite_code ||
-          '';
+  if (!currentUser) {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (token) {
+      try {
+        currentUser = verifyToken(token);
+      } catch (tokenError) {
+        console.error('Error verifying token for /api/me:', tokenError?.message || tokenError);
       }
-    } catch (orgError) {
-      console.error('Error fetching organization for /api/me:', orgError);
     }
+  }
 
-    res.json({
-      authenticated: true,
-      user: {
-        ...sessionUser,
-        company,
-        organization,
-      }
-    });
-  } else {
-    res.status(401).json({
+  if (!currentUser) {
+    return res.status(401).json({
       authenticated: false,
-      message: 'Not authenticated'
+      message: 'Not authenticated',
     });
   }
-});
 
-/**
- * GET /api/me (with JWT)
- * Get current user from JWT token
- */
-app.get('/api/me', verifyTokenMiddleware, async (req, res) => {
-  const tokenUser = req.user;
   let company = '';
   let organization = null;
 
   try {
-    if (tokenUser.invite_code) {
+    if (currentUser.invite_code) {
       const orgResponse = await query(
-        `/items/organizations?filter[invite_code][_eq]=${encodeURIComponent(tokenUser.invite_code)}&fields=*&limit=1`
+        `/items/organizations?filter[invite_code][_eq]=${encodeURIComponent(currentUser.invite_code)}&fields=*&limit=1`
       );
       const org = (orgResponse.data.data || [])[0] || null;
       organization = org;
@@ -545,17 +516,17 @@ app.get('/api/me', verifyTokenMiddleware, async (req, res) => {
         org?.title ||
         org?.label ||
         org?.invite_code ||
-        tokenUser.invite_code ||
+        currentUser.invite_code ||
         '';
     }
   } catch (orgError) {
-    console.error('Error fetching organization for /api/me (JWT):', orgError);
+    console.error('Error fetching organization for /api/me:', orgError);
   }
 
   res.json({
     authenticated: true,
     user: {
-      ...tokenUser,
+      ...currentUser,
       company,
       organization,
     },
