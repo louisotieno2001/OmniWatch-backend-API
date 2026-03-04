@@ -113,6 +113,54 @@ function verifyToken(token) {
   }
 }
 
+// Patrol lifecycle statuses used by the mobile flow.
+const PATROL_STATUS = {
+  ACTIVE_ON_PATROL: 'active_on_patrol',
+  INACTIVE_NOT_STARTED: 'inactive_patrol_not_started',
+  LOGGED_OUT_ON_PATROL: 'logged_out_on_patrol',
+  COMPLETED: 'completed',
+  LEGACY_ACTIVE: 'active',
+};
+
+const ONGOING_PATROL_STATUSES = new Set([
+  PATROL_STATUS.ACTIVE_ON_PATROL,
+  PATROL_STATUS.LOGGED_OUT_ON_PATROL,
+  PATROL_STATUS.LEGACY_ACTIVE,
+]);
+
+const normalizePatrolLifecycleStatus = (status) => {
+  if (status === PATROL_STATUS.LEGACY_ACTIVE) {
+    return PATROL_STATUS.ACTIVE_ON_PATROL;
+  }
+  if (
+    status === PATROL_STATUS.ACTIVE_ON_PATROL ||
+    status === PATROL_STATUS.INACTIVE_NOT_STARTED ||
+    status === PATROL_STATUS.LOGGED_OUT_ON_PATROL ||
+    status === PATROL_STATUS.COMPLETED
+  ) {
+    return status;
+  }
+  return PATROL_STATUS.INACTIVE_NOT_STARTED;
+};
+
+const getLatestOngoingPatrol = async (userId) => {
+  try {
+    const patrolsResponse = await query(
+      `/items/patrols?filter[user_id][_eq]=${encodeURIComponent(userId)}&sort=-start_time&limit=25`
+    );
+    const patrols = patrolsResponse.data.data || [];
+    const ongoing = patrols.find(
+      (patrol) =>
+        !patrol.end_time &&
+        ONGOING_PATROL_STATUSES.has(normalizePatrolLifecycleStatus(patrol.status))
+    );
+    return ongoing || null;
+  } catch (error) {
+    console.error(`Error finding ongoing patrol for user ${userId}:`, error);
+    return null;
+  }
+};
+
 // ============================================
 // AUTH MIDDLEWARE
 // ============================================
@@ -390,6 +438,8 @@ app.post('/api/login', async (req, res) => {
 
     // Fetch assignments for guards
     let assignments = [];
+    let ongoingPatrol = null;
+    let patrolStatus = PATROL_STATUS.INACTIVE_NOT_STARTED;
     if (user.role === 'guard') {
       try {
         const assignmentsResponse = await query(`/items/assignments?filter[user_id][_eq]=${user.id}`);
@@ -397,6 +447,26 @@ app.post('/api/login', async (req, res) => {
       } catch (assignmentError) {
         console.error('Error fetching guard assignments:', assignmentError);
         assignments = [];
+      }
+
+      // If an unfinished patrol exists from a previous app session/device shutdown,
+      // mark it as logged-out-on-patrol so clients can communicate that state.
+      ongoingPatrol = await getLatestOngoingPatrol(user.id);
+      if (ongoingPatrol && !ongoingPatrol.end_time) {
+        patrolStatus = normalizePatrolLifecycleStatus(ongoingPatrol.status);
+        if (patrolStatus === PATROL_STATUS.ACTIVE_ON_PATROL) {
+          try {
+            const patchResponse = await query(`/items/patrols/${encodeURIComponent(ongoingPatrol.id)}`, {
+              method: 'PATCH',
+              data: { status: PATROL_STATUS.LOGGED_OUT_ON_PATROL },
+            });
+            ongoingPatrol = patchResponse?.data?.data || ongoingPatrol;
+            patrolStatus = PATROL_STATUS.LOGGED_OUT_ON_PATROL;
+          } catch (statusPatchError) {
+            console.error('Error patching patrol status on login:', statusPatchError);
+            patrolStatus = PATROL_STATUS.ACTIVE_ON_PATROL;
+          }
+        }
       }
     }
 
@@ -419,7 +489,9 @@ app.post('/api/login', async (req, res) => {
       phone: user.phone,
       role: user.role,
       invite_code: user.invite_code,
-      assignments: assignments
+      assignments: assignments,
+      patrol_status: patrolStatus,
+      ongoing_patrol: ongoingPatrol,
     };
 
     // console.log(tokenPayload)
@@ -441,8 +513,12 @@ app.post('/api/login', async (req, res) => {
         role: user.role,
         invite_code: user.invite_code,
         assignments: assignments,
+        patrol_status: patrolStatus,
+        ongoing_patrol: ongoingPatrol,
       },
       token,
+      patrol_status: patrolStatus,
+      ongoing_patrol: ongoingPatrol,
     });
   } catch (error) {
     console.error('Login Error:', error);
@@ -457,17 +533,42 @@ app.post('/api/login', async (req, res) => {
  * POST /api/logout
  * Logout user and destroy session
  */
-app.post('/api/logout', (req, res) => {
-  req.session.destroy((err) => {
-    if (err) {
-      return res.status(500).json({ 
-        error: 'Internal Server Error', 
-        message: 'Failed to logout' 
-      });
+app.post('/api/logout', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const decoded = token ? verifyToken(token) : null;
+
+    if (decoded?.id && decoded.role === 'guard') {
+      const ongoingPatrol = await getLatestOngoingPatrol(decoded.id);
+      if (ongoingPatrol && !ongoingPatrol.end_time) {
+        return res.status(409).json({
+          error: 'Active Patrol',
+          code: 'ACTIVE_PATROL_LOGOUT_BLOCKED',
+          message: 'You cannot logout while on patrol. End the patrol first.',
+          patrol_status: normalizePatrolLifecycleStatus(ongoingPatrol.status),
+          ongoing_patrol: ongoingPatrol,
+        });
+      }
     }
-    res.clearCookie('connect.sid');
-    res.json({ message: 'Logout successful' });
-  });
+
+    req.session.destroy((err) => {
+      if (err) {
+        return res.status(500).json({
+          error: 'Internal Server Error',
+          message: 'Failed to logout',
+        });
+      }
+      res.clearCookie('connect.sid');
+      res.json({ message: 'Logout successful' });
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to logout',
+    });
+  }
 });
 
 /**
@@ -682,7 +783,10 @@ app.get('/api/patrols', verifyTokenMiddleware, async (req, res) => {
     const response = await query(`/items/patrols?filter[user_id][_eq]=${userId}&sort=${sort}&limit=${limit}`);
 
     res.json({
-      patrols: response.data.data
+      patrols: (response.data.data || []).map((patrol) => ({
+        ...patrol,
+        status: normalizePatrolLifecycleStatus(patrol.status),
+      })),
     });
   } catch (error) {
     console.error('Error fetching patrols:', error);
@@ -752,12 +856,24 @@ app.get('/api/admin/guards', verifyTokenMiddleware, async (req, res) => {
 
       const locationId = assignment?.location || '';
       const locationName = locationId ? (locationsById.get(locationId) || locationId) : 'Not assigned';
-      const isOnActivePatrol = latestPatrol && latestPatrol.status === 'active' && !latestPatrol.end_time;
+      const normalizedPatrolStatus = latestPatrol
+        ? normalizePatrolLifecycleStatus(latestPatrol.status)
+        : PATROL_STATUS.INACTIVE_NOT_STARTED;
+      const isOnActivePatrol =
+        latestPatrol &&
+        !latestPatrol.end_time &&
+        normalizedPatrolStatus === PATROL_STATUS.ACTIVE_ON_PATROL;
+      const isLoggedOutOnPatrol =
+        latestPatrol &&
+        !latestPatrol.end_time &&
+        normalizedPatrolStatus === PATROL_STATUS.LOGGED_OUT_ON_PATROL;
 
       let lastSeen = guard.last_access || null;
       let lastSeenDisplay = 'Never';
       if (isOnActivePatrol) {
         lastSeenDisplay = 'Online (Currently on patrol)';
+      } else if (isLoggedOutOnPatrol) {
+        lastSeenDisplay = 'Logged out (Patrol ongoing)';
       } else if (latestPatrol?.end_time) {
         lastSeen = latestPatrol.end_time;
         lastSeenDisplay = latestPatrol.end_time;
@@ -775,6 +891,7 @@ app.get('/api/admin/guards', verifyTokenMiddleware, async (req, res) => {
         last_seen: lastSeen,
         last_seen_display: lastSeenDisplay,
         is_online: Boolean(isOnActivePatrol),
+        patrol_status: normalizedPatrolStatus,
       });
     }
 
@@ -1020,6 +1137,7 @@ app.get('/api/admin/patrols', verifyTokenMiddleware, async (req, res) => {
 
       enrichedPatrols.push({
         ...patrol,
+        status: normalizePatrolLifecycleStatus(patrol.status),
         guard_name: guardName || patrol.guard_name || 'Unknown Guard',
         assigned_areas: assignmentAreas || patrol.assigned_areas || '',
         location: patrol.location || resolvedLocationName || 'Unknown Location',
@@ -1369,7 +1487,7 @@ app.post('/api/patrols', verifyTokenMiddleware, async (req, res) => {
       duration: typeof duration === 'number' ? duration : null,
       end_time: end_time || null,
       map: normalizeMapValue(map !== undefined ? map : location_data),
-      status: 'active',
+      status: PATROL_STATUS.ACTIVE_ON_PATROL,
     };
 
     const response = await query('/items/patrols', {
@@ -1424,12 +1542,12 @@ app.patch('/api/patrols/:id', verifyTokenMiddleware, async (req, res) => {
       updateData.map = normalizeMapValue(location_data);
     }
     if (status) {
-      updateData.status = status;
+      updateData.status = normalizePatrolLifecycleStatus(status);
     }
 
-    // If end_time is provided, set status to completed
+    // If end_time is provided, mark patrol as completed.
     if (end_time && !status) {
-      updateData.status = 'completed';
+      updateData.status = PATROL_STATUS.COMPLETED;
     }
 
     // Update patrol in Directus. If duration is rejected by schema/permissions,
