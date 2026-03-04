@@ -11,6 +11,7 @@ Express.js API backend for the OmniWatch guard monitoring mobile application.
 
 1. **Install Dependencies**
    ```bash
+   node scripts/generate-package-json.cjs
    npm install
    ```
 
@@ -91,7 +92,9 @@ backend/
 │   ├── patrols.js         # Patrol routes
 │   └── users.js           # User routes
 ├── .env.example           # Environment template
-├── package.json
+├── package.cjs
+├── scripts/
+│   └── generate-package-json.cjs
 └── server.js              # Entry point
 ```
 
@@ -111,4 +114,3 @@ const API_BASE_URL = 'http://YOUR_IP_ADDRESS:5000/api';
 
 For Android emulator, use `http://10.0.2.2:5000/api`
 For iOS simulator, use `http://localhost:5000/api`
-
