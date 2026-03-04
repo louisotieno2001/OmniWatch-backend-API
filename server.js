@@ -13,7 +13,6 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const https = require('https');
-const fetch = require('node-fetch');
 
 const app = express();
 const PORT = process.env.APIPORT || 5000;
