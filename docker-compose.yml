@@ -1,0 +1,65 @@
+services:
+  postgres:
+    restart: always
+    image: postgis/postgis:13-3.1
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${DB_DATABASE}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ./docker/pgdata:/var/lib/postgresql/data
+    networks:
+      omniwatch:
+
+  directus:
+    restart: always
+    image: directus/directus:11.3.2
+    depends_on:
+      - postgres
+    ports:
+      - "0.0.0.0:8057:8057"
+    env_file:
+      - .env
+    extra_hosts:
+      - "omni.hustlerati.com:host-gateway"
+    environment:                                                                                                                                                                
+      DB_TYPE: postgres  # Specify the database type
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_HOST: postgres  # Use the service name as the host
+      DB_PORT: 5432   
+      EXTENSIONS_AUTO_RELOAD: true
+    networks:
+      omniwatch:
+    volumes:
+      - ./docker/directus/uploads:/directus/uploads
+      - ./docker/directus/extensions:/directus/extensions
+      - ./docker/directus/database:/directus/database
+      - ./docker/directus/templates:/directus/templates
+
+  express:
+    restart: always
+    build: .
+    depends_on:
+      - directus
+    env_file:
+      - .env
+    environment:
+      PORT: ${APIPORT}
+      SALT_ROUNDS: 10
+      DIRECTUS_URL: "http://directus:8057"
+      DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
+    networks:
+      omniwatch:
+    ports:
+      - "0.0.0.0:5000:5000"
+
+networks:
+  omniwatch:                                                                                
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24 
