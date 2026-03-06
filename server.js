@@ -161,6 +161,240 @@ const getLatestOngoingPatrol = async (userId) => {
   }
 };
 
+const ADMIN_NOTIFICATION_TYPE = {
+  LOG_CREATED: 'log_created',
+  GUARD_LATE_START: 'guard_late_start',
+  GUARD_LOGGED_OUT_ON_PATROL: 'guard_logged_out_on_patrol',
+  PATROL_ENDED_EARLY: 'patrol_ended_early',
+  PATROL_NOT_ENDED_AFTER_SHIFT: 'patrol_not_ended_after_shift',
+};
+
+const safeDate = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const parseShiftTimeOnReferenceDate = (timeValue, referenceDate) => {
+  if (!timeValue || typeof timeValue !== 'string') return null;
+  const parts = String(timeValue).trim().split(':');
+  if (parts.length < 2) return null;
+
+  const hours = Number(parts[0]);
+  const minutes = Number(parts[1]);
+  const seconds = parts.length > 2 ? Number(parts[2]) : 0;
+
+  if (
+    !Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds) ||
+    hours < 0 || hours > 23 || minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59
+  ) {
+    return null;
+  }
+
+  const date = new Date(referenceDate);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(hours, minutes, seconds, 0);
+  return date;
+};
+
+const getGuardDisplayName = (guard) => {
+  const firstName = String(guard?.first_name || '').trim();
+  const lastName = String(guard?.last_name || '').trim();
+  const fullName = `${firstName} ${lastName}`.trim();
+  return fullName || 'Unknown Guard';
+};
+
+const getNotificationPriorityForLogCategory = (category) => {
+  if (category === 'incident') return 'high';
+  if (category === 'unusual') return 'medium';
+  return 'low';
+};
+
+const buildAdminNotifications = async (inviteCode, limit = 100) => {
+  const guardsResponse = await query(
+    `/items/users?filter[role][_eq]=guard&filter[invite_code][_eq]=${encodeURIComponent(inviteCode)}&fields=id,first_name,last_name,phone`
+  );
+  const guards = guardsResponse.data.data || [];
+  if (!guards.length) return [];
+
+  const locationsById = new Map();
+  try {
+    const locationsResponse = await query(
+      `/items/locations?filter[organization][_eq]=${encodeURIComponent(inviteCode)}&fields=id,name`
+    );
+    const locations = locationsResponse.data.data || [];
+    for (const location of locations) {
+      locationsById.set(location.id, location.name);
+    }
+  } catch (locationError) {
+    console.error('Error fetching locations while building admin notifications:', locationError);
+  }
+
+  const notifications = [];
+  const now = new Date();
+
+  for (const guard of guards) {
+    const guardId = guard.id;
+    const guardName = getGuardDisplayName(guard);
+
+    let assignment = null;
+    let patrols = [];
+    let logs = [];
+
+    try {
+      const assignmentResponse = await query(
+        `/items/assignments?filter[user_id][_eq]=${encodeURIComponent(guardId)}&sort=-date_updated&limit=1`
+      );
+      assignment = (assignmentResponse.data.data || [])[0] || null;
+    } catch (assignmentError) {
+      console.error(`Error fetching assignment for guard ${guardId} during notification build:`, assignmentError);
+    }
+
+    try {
+      const patrolsResponse = await query(
+        `/items/patrols?filter[user_id][_eq]=${encodeURIComponent(guardId)}&sort=-start_time&limit=30`
+      );
+      patrols = patrolsResponse.data.data || [];
+    } catch (patrolError) {
+      console.error(`Error fetching patrols for guard ${guardId} during notification build:`, patrolError);
+    }
+
+    try {
+      const logsResponse = await query(
+        `/items/logs?filter[user_id][_eq]=${encodeURIComponent(guardId)}&sort=-timestamp&limit=30`
+      );
+      logs = logsResponse.data.data || [];
+    } catch (logError) {
+      console.error(`Error fetching logs for guard ${guardId} during notification build:`, logError);
+    }
+
+    const assignmentLocationValue = assignment?.location || '';
+    const resolvedLocation = assignmentLocationValue
+      ? (locationsById.get(assignmentLocationValue) || assignmentLocationValue)
+      : 'Unknown Location';
+
+    for (const log of logs) {
+      const eventDate = safeDate(log.timestamp) || safeDate(log.date_created) || now;
+      notifications.push({
+        id: `log_created:${log.id}`,
+        type: ADMIN_NOTIFICATION_TYPE.LOG_CREATED,
+        priority: getNotificationPriorityForLogCategory(log.category),
+        title: `New log created by ${guardName}`,
+        message: log.title ? `${log.title}: ${log.description || ''}`.trim() : (log.description || 'A new guard log was submitted'),
+        guard_id: guardId,
+        guard_name: guardName,
+        patrol_id: log.patrol_id || null,
+        log_id: log.id || null,
+        location: log.location || resolvedLocation,
+        event_time: eventDate.toISOString(),
+      });
+    }
+
+    if (assignment?.start_time) {
+      const shiftStartToday = parseShiftTimeOnReferenceDate(assignment.start_time, now);
+      if (shiftStartToday) {
+        const lateThreshold = new Date(shiftStartToday.getTime() + (15 * 60 * 1000));
+        const hasStartedTodayPatrol = patrols.some((patrol) => {
+          const patrolStart = safeDate(patrol.start_time);
+          return patrolStart && patrolStart.getTime() >= shiftStartToday.getTime();
+        });
+
+        if (now.getTime() > lateThreshold.getTime() && !hasStartedTodayPatrol) {
+          const dateKey = shiftStartToday.toISOString().slice(0, 10);
+          notifications.push({
+            id: `guard_late_start:${guardId}:${dateKey}`,
+            type: ADMIN_NOTIFICATION_TYPE.GUARD_LATE_START,
+            priority: 'high',
+            title: `${guardName} is late for patrol`,
+            message: `No patrol has started at least 15 minutes after assigned start time (${assignment.start_time}).`,
+            guard_id: guardId,
+            guard_name: guardName,
+            patrol_id: null,
+            log_id: null,
+            location: resolvedLocation,
+            event_time: lateThreshold.toISOString(),
+          });
+        }
+      }
+    }
+
+    for (const patrol of patrols) {
+      const patrolId = patrol.id || '';
+      const patrolStart = safeDate(patrol.start_time);
+      const patrolEnd = safeDate(patrol.end_time);
+      const normalizedStatus = normalizePatrolLifecycleStatus(patrol.status);
+      const shiftEndForPatrolDay =
+        assignment?.end_time && patrolStart
+          ? parseShiftTimeOnReferenceDate(assignment.end_time, patrolStart)
+          : null;
+
+      if (!patrolEnd && normalizedStatus === PATROL_STATUS.LOGGED_OUT_ON_PATROL) {
+        const statusEventDate = safeDate(patrol.date_updated) || patrolStart || now;
+        notifications.push({
+          id: `guard_logged_out_on_patrol:${patrolId}`,
+          type: ADMIN_NOTIFICATION_TYPE.GUARD_LOGGED_OUT_ON_PATROL,
+          priority: 'high',
+          title: `${guardName} logged out while on patrol`,
+          message: 'This patrol is still open and marked as logged out on patrol.',
+          guard_id: guardId,
+          guard_name: guardName,
+          patrol_id: patrolId || null,
+          log_id: null,
+          location: patrol.location || resolvedLocation,
+          event_time: statusEventDate.toISOString(),
+        });
+      }
+
+      if (
+        patrolEnd &&
+        shiftEndForPatrolDay &&
+        shiftEndForPatrolDay.getTime() - patrolEnd.getTime() > (60 * 1000)
+      ) {
+        notifications.push({
+          id: `patrol_ended_early:${patrolId}`,
+          type: ADMIN_NOTIFICATION_TYPE.PATROL_ENDED_EARLY,
+          priority: 'medium',
+          title: `${guardName} ended patrol early`,
+          message: `Patrol ended before assigned end time (${assignment.end_time}).`,
+          guard_id: guardId,
+          guard_name: guardName,
+          patrol_id: patrolId || null,
+          log_id: null,
+          location: patrol.location || resolvedLocation,
+          event_time: patrolEnd.toISOString(),
+        });
+      }
+
+      if (!patrolEnd && shiftEndForPatrolDay) {
+        const allowedEnd = new Date(shiftEndForPatrolDay.getTime() + (15 * 60 * 1000));
+        if (now.getTime() > allowedEnd.getTime()) {
+          notifications.push({
+            id: `patrol_not_ended_after_shift:${patrolId}`,
+            type: ADMIN_NOTIFICATION_TYPE.PATROL_NOT_ENDED_AFTER_SHIFT,
+            priority: 'high',
+            title: `${guardName} has not ended patrol`,
+            message: `Patrol is still active 15 minutes after assigned end time (${assignment.end_time}).`,
+            guard_id: guardId,
+            guard_name: guardName,
+            patrol_id: patrolId || null,
+            log_id: null,
+            location: patrol.location || resolvedLocation,
+            event_time: allowedEnd.toISOString(),
+          });
+        }
+      }
+    }
+  }
+
+  notifications.sort((a, b) => {
+    const aTime = safeDate(a.event_time)?.getTime() || 0;
+    const bTime = safeDate(b.event_time)?.getTime() || 0;
+    return bTime - aTime;
+  });
+
+  return notifications.slice(0, Math.max(1, Number(limit) || 100));
+};
+
 // ============================================
 // AUTH MIDDLEWARE
 // ============================================
@@ -1447,6 +1681,37 @@ const getAdminLogsHandler = async (req, res) => {
  * Query params: limit (optional), sort (optional)
  */
 app.get('/api/admin/logs', verifyTokenMiddleware, getAdminLogsHandler);
+
+/**
+ * GET /api/admin/notifications
+ * Build admin notification feed from logs, assignments, and patrol state.
+ * Query params: limit (optional)
+ */
+app.get('/api/admin/notifications', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const inviteCode = req.user.invite_code;
+    const limit = req.query.limit || 100;
+
+    if (!inviteCode) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'No organization invite code found',
+      });
+    }
+
+    const notifications = await buildAdminNotifications(inviteCode, limit);
+    return res.json({
+      notifications,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Error building admin notifications:', error);
+    return res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to fetch admin notifications',
+    });
+  }
+});
 
 /**
  * Normalize map payloads before persisting.
