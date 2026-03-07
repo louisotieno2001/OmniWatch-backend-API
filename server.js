@@ -395,6 +395,318 @@ const buildAdminNotifications = async (inviteCode, limit = 100) => {
   return notifications.slice(0, Math.max(1, Number(limit) || 100));
 };
 
+const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+const PERIODIC_PUSH_SCAN_MS = 60 * 1000;
+let periodicPushScanInterval = null;
+
+const buildDirectusQueryString = (params = {}) =>
+  Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+    .join('&');
+
+const fetchAllDirectusItems = async (collection, params = {}, pageSize = 200) => {
+  const items = [];
+  let offset = 0;
+
+  while (true) {
+    const queryString = buildDirectusQueryString({
+      ...params,
+      limit: pageSize,
+      offset,
+    });
+    const response = await query(`/items/${collection}?${queryString}`);
+    const page = response?.data?.data || [];
+    items.push(...page);
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return items;
+};
+
+const ensurePushNotificationCollections = async () => {
+  // If these checks fail, the server logs actionable setup guidance.
+  await query('/fields/admin_push_tokens?fields=field');
+  await query('/fields/push_dispatches?fields=field');
+};
+
+const upsertAdminPushToken = async ({ userId, inviteCode, expoPushToken, platform }) => {
+  const userIdText = String(userId);
+  const existingResponse = await query(
+    `/items/admin_push_tokens?${buildDirectusQueryString({
+      'filter[user_id][_eq]': userIdText,
+      fields: 'id',
+      limit: 1,
+    })}`
+  );
+  const existing = (existingResponse?.data?.data || [])[0];
+  const payload = {
+    user_id: userIdText,
+    invite_code: String(inviteCode),
+    expo_push_token: String(expoPushToken),
+    platform: platform ? String(platform) : null,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (existing?.id) {
+    await query(`/items/admin_push_tokens/${encodeURIComponent(existing.id)}`, {
+      method: 'PATCH',
+      data: payload,
+    });
+    return;
+  }
+
+  await query('/items/admin_push_tokens', {
+    method: 'POST',
+    data: payload,
+  });
+};
+
+const deleteAdminPushToken = async ({ userId }) => {
+  const matches = await fetchAllDirectusItems('admin_push_tokens', {
+    'filter[user_id][_eq]': String(userId),
+    fields: 'id',
+  });
+
+  for (const row of matches) {
+    if (!row?.id) continue;
+    await query(`/items/admin_push_tokens/${encodeURIComponent(row.id)}`, {
+      method: 'DELETE',
+    });
+  }
+};
+
+const getAdminPushTokensByInviteCode = async (inviteCode) => {
+  const rows = await fetchAllDirectusItems('admin_push_tokens', {
+    'filter[invite_code][_eq]': String(inviteCode),
+    fields: 'id,user_id,expo_push_token',
+  });
+  return rows || [];
+};
+
+const hasDispatchRecord = async (eventKey) => {
+  const response = await query(
+    `/items/push_dispatches?${buildDirectusQueryString({
+      'filter[event_key][_eq]': String(eventKey),
+      fields: 'id',
+      limit: 1,
+    })}`
+  );
+  return ((response?.data?.data || []).length || 0) > 0;
+};
+
+const recordDispatch = async ({ eventKey, eventType, inviteCode, payload }) => {
+  await query('/items/push_dispatches', {
+    method: 'POST',
+    data: {
+      event_key: String(eventKey),
+      event_type: String(eventType),
+      invite_code: String(inviteCode),
+      payload: payload || {},
+      sent_at: new Date().toISOString(),
+    },
+  });
+};
+
+const sendExpoPushNotifications = async (messages) => {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  try {
+    const response = await axios.post(EXPO_PUSH_URL, messages, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      timeout: 10000,
+    });
+    return response?.data || null;
+  } catch (error) {
+    console.error('Error sending Expo push notifications:', error?.response?.data || error.message || error);
+    return null;
+  }
+};
+
+const dispatchPushToOrganization = async ({
+  inviteCode,
+  eventType,
+  eventKey,
+  title,
+  body,
+  data,
+  priority = 'default',
+}) => {
+  if (!inviteCode || !eventKey || !title || !body) return { skipped: true, reason: 'invalid_payload' };
+
+  const alreadySent = await hasDispatchRecord(eventKey);
+  if (alreadySent) return { skipped: true, reason: 'already_dispatched' };
+
+  const tokens = await getAdminPushTokensByInviteCode(inviteCode);
+  if (!tokens.length) return { skipped: true, reason: 'no_registered_tokens' };
+
+  const messages = tokens.map((row) => ({
+    to: row.expo_push_token,
+    sound: 'default',
+    title,
+    body,
+    data: data || {},
+    priority,
+    channelId: 'omniwatch-alerts',
+  }));
+
+  const expoResponse = await sendExpoPushNotifications(messages);
+  const responseItems = Array.isArray(expoResponse?.data) ? expoResponse.data : [];
+
+  for (let i = 0; i < responseItems.length; i += 1) {
+    const item = responseItems[i];
+    const tokenRow = tokens[i];
+    if (!item || !tokenRow) continue;
+    const errorDetails = item?.details?.error || '';
+    if (item.status === 'error' && (errorDetails === 'DeviceNotRegistered' || errorDetails === 'InvalidCredentials')) {
+      await deleteAdminPushToken({ userId: tokenRow.user_id });
+    }
+  }
+
+  await recordDispatch({
+    eventKey,
+    eventType,
+    inviteCode,
+    payload: { title, body, data: data || {}, response: expoResponse || null },
+  });
+
+  return { dispatched: true, recipients: tokens.length };
+};
+
+const getLatestAssignmentForGuard = async (guardId) => {
+  const response = await query(
+    `/items/assignments?filter[user_id][_eq]=${encodeURIComponent(guardId)}&sort=-date_updated&limit=1`
+  );
+  return (response?.data?.data || [])[0] || null;
+};
+
+const resolveLocationName = async (inviteCode, locationId) => {
+  if (!locationId) return 'Unknown Location';
+  try {
+    const response = await query(
+      `/items/locations?filter[id][_eq]=${encodeURIComponent(locationId)}&filter[organization][_eq]=${encodeURIComponent(inviteCode)}&fields=id,name&limit=1`
+    );
+    const location = (response?.data?.data || [])[0] || null;
+    return location?.name || locationId;
+  } catch (_error) {
+    return locationId;
+  }
+};
+
+const evaluatePeriodicPushRulesForOrganization = async (inviteCode) => {
+  if (!inviteCode) return;
+
+  let guards = [];
+  try {
+    const guardsResponse = await query(
+      `/items/users?filter[role][_eq]=guard&filter[invite_code][_eq]=${encodeURIComponent(inviteCode)}&fields=id,first_name,last_name`
+    );
+    guards = guardsResponse.data.data || [];
+  } catch (guardError) {
+    console.error('Failed fetching guards for periodic push scan:', guardError);
+    return;
+  }
+
+  const now = new Date();
+
+  for (const guard of guards) {
+    const guardId = guard.id;
+    const guardName = getGuardDisplayName(guard);
+    let assignment = null;
+    let patrols = [];
+
+    try {
+      assignment = await getLatestAssignmentForGuard(guardId);
+    } catch (assignmentError) {
+      console.error(`Failed fetching assignment for guard ${guardId} in periodic scan:`, assignmentError);
+    }
+
+    try {
+      const patrolResponse = await query(
+        `/items/patrols?filter[user_id][_eq]=${encodeURIComponent(guardId)}&sort=-start_time&limit=20`
+      );
+      patrols = patrolResponse?.data?.data || [];
+    } catch (patrolError) {
+      console.error(`Failed fetching patrols for guard ${guardId} in periodic scan:`, patrolError);
+    }
+
+    const locationName = await resolveLocationName(inviteCode, assignment?.location || '');
+
+    if (assignment?.start_time) {
+      const shiftStart = parseShiftTimeOnReferenceDate(assignment.start_time, now);
+      if (shiftStart) {
+        const lateThreshold = new Date(shiftStart.getTime() + (15 * 60 * 1000));
+        const startedShiftPatrol = patrols.some((patrol) => {
+          const start = safeDate(patrol.start_time);
+          return start && start.getTime() >= shiftStart.getTime();
+        });
+
+        if (now.getTime() > lateThreshold.getTime() && !startedShiftPatrol) {
+          const keyDay = shiftStart.toISOString().slice(0, 10);
+          await dispatchPushToOrganization({
+            inviteCode,
+            eventType: ADMIN_NOTIFICATION_TYPE.GUARD_LATE_START,
+            eventKey: `${ADMIN_NOTIFICATION_TYPE.GUARD_LATE_START}:${guardId}:${keyDay}`,
+            title: `${guardName} is late`,
+            body: `No patrol started 15+ min after assigned start (${assignment.start_time}).`,
+            data: {
+              type: ADMIN_NOTIFICATION_TYPE.GUARD_LATE_START,
+              guard_id: guardId,
+              guard_name: guardName,
+              location: locationName,
+            },
+            priority: 'high',
+          });
+        }
+      }
+    }
+
+    for (const patrol of patrols) {
+      const patrolStart = safeDate(patrol.start_time);
+      const patrolEnd = safeDate(patrol.end_time);
+      if (!assignment?.end_time || !patrolStart || patrolEnd) continue;
+
+      const shiftEndForDay = parseShiftTimeOnReferenceDate(assignment.end_time, patrolStart);
+      if (!shiftEndForDay) continue;
+      const overdueThreshold = new Date(shiftEndForDay.getTime() + (15 * 60 * 1000));
+
+      if (now.getTime() > overdueThreshold.getTime()) {
+        await dispatchPushToOrganization({
+          inviteCode,
+          eventType: ADMIN_NOTIFICATION_TYPE.PATROL_NOT_ENDED_AFTER_SHIFT,
+          eventKey: `${ADMIN_NOTIFICATION_TYPE.PATROL_NOT_ENDED_AFTER_SHIFT}:${patrol.id}:${overdueThreshold.toISOString()}`,
+          title: `${guardName} patrol not ended`,
+          body: `Patrol still active 15+ min after assigned end (${assignment.end_time}).`,
+          data: {
+            type: ADMIN_NOTIFICATION_TYPE.PATROL_NOT_ENDED_AFTER_SHIFT,
+            guard_id: guardId,
+            guard_name: guardName,
+            patrol_id: patrol.id,
+            location: patrol.location || locationName,
+          },
+          priority: 'high',
+        });
+      }
+    }
+  }
+};
+
+const runPeriodicPushScan = async () => {
+  try {
+    const rows = await fetchAllDirectusItems('admin_push_tokens', {
+      fields: 'invite_code',
+    });
+    const inviteCodes = [...new Set((rows || []).map((row) => row.invite_code).filter(Boolean))];
+    for (const inviteCode of inviteCodes) {
+      await evaluatePeriodicPushRulesForOrganization(inviteCode);
+    }
+  } catch (error) {
+    console.error('Periodic push scan failed:', error);
+  }
+};
+
 // ============================================
 // AUTH MIDDLEWARE
 // ============================================
@@ -696,6 +1008,21 @@ app.post('/api/login', async (req, res) => {
             });
             ongoingPatrol = patchResponse?.data?.data || ongoingPatrol;
             patrolStatus = PATROL_STATUS.LOGGED_OUT_ON_PATROL;
+            await dispatchPushToOrganization({
+              inviteCode: user.invite_code,
+              eventType: ADMIN_NOTIFICATION_TYPE.GUARD_LOGGED_OUT_ON_PATROL,
+              eventKey: `${ADMIN_NOTIFICATION_TYPE.GUARD_LOGGED_OUT_ON_PATROL}:${ongoingPatrol.id}`,
+              title: `${getGuardDisplayName(user)} logged out while on patrol`,
+              body: 'A guard has an open patrol that is now marked as logged out on patrol.',
+              data: {
+                type: ADMIN_NOTIFICATION_TYPE.GUARD_LOGGED_OUT_ON_PATROL,
+                guard_id: user.id,
+                guard_name: getGuardDisplayName(user),
+                patrol_id: ongoingPatrol.id,
+                location: ongoingPatrol.location || 'Unknown Location',
+              },
+              priority: 'high',
+            });
           } catch (statusPatchError) {
             console.error('Error patching patrol status on login:', statusPatchError);
             patrolStatus = PATROL_STATUS.ACTIVE_ON_PATROL;
@@ -865,6 +1192,85 @@ app.get('/api/me', async (req, res) => {
       organization,
     },
   });
+});
+
+/**
+ * POST /api/admin/push-token
+ * Register or update Expo push token for admin/supervisor notifications.
+ * Body: { expo_push_token, platform? }
+ */
+app.post('/api/admin/push-token', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const { expo_push_token, platform } = req.body || {};
+    const { id, role, invite_code } = req.user || {};
+
+    if (role !== 'admin' && role !== 'supervisor') {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Only admin or supervisor users can register push tokens',
+      });
+    }
+
+    if (!invite_code) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Missing organization invite code',
+      });
+    }
+
+    const isExpoToken =
+      typeof expo_push_token === 'string' &&
+      (expo_push_token.startsWith('ExponentPushToken[') || expo_push_token.startsWith('ExpoPushToken['));
+    if (!isExpoToken) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        message: 'A valid Expo push token is required',
+      });
+    }
+
+    await upsertAdminPushToken({
+      userId: id,
+      inviteCode: invite_code,
+      expoPushToken: expo_push_token,
+      platform,
+    });
+
+    return res.json({
+      message: 'Push token registered successfully',
+    });
+  } catch (error) {
+    console.error('Error registering admin push token:', error);
+    return res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to register push token',
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/push-token
+ * Remove stored push token for current admin/supervisor device.
+ */
+app.delete('/api/admin/push-token', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const { id, role } = req.user || {};
+
+    if (role !== 'admin' && role !== 'supervisor') {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Only admin or supervisor users can remove push tokens',
+      });
+    }
+
+    await deleteAdminPushToken({ userId: id });
+    return res.json({ message: 'Push token removed successfully' });
+  } catch (error) {
+    console.error('Error removing admin push token:', error);
+    return res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to remove push token',
+    });
+  }
 });
 
 /**
@@ -1790,6 +2196,14 @@ app.patch('/api/patrols/:id', verifyTokenMiddleware, async (req, res) => {
       status
     } = req.body;
 
+    let existingPatrol = null;
+    try {
+      const patrolResponse = await query(`/items/patrols/${encodeURIComponent(id)}`);
+      existingPatrol = patrolResponse?.data?.data || null;
+    } catch (fetchPatrolError) {
+      console.error(`Error fetching patrol ${id} before update:`, fetchPatrolError);
+    }
+
     // console.log("Data body:", req.body)
 
     // Build update data - use 'map' field as per Directus collection schema
@@ -1849,6 +2263,75 @@ app.patch('/api/patrols/:id', verifyTokenMiddleware, async (req, res) => {
       message: 'Patrol updated successfully',
       data: response.data.data
     });
+
+    const updatedPatrol = response?.data?.data || null;
+    const normalizedNewStatus = normalizePatrolLifecycleStatus(
+      status || updatedPatrol?.status || existingPatrol?.status
+    );
+    const guardId = updatedPatrol?.user_id || existingPatrol?.user_id || req.user?.id || null;
+
+    if (normalizedNewStatus === PATROL_STATUS.LOGGED_OUT_ON_PATROL && updatedPatrol && !updatedPatrol.end_time && guardId) {
+      try {
+        const guardResponse = await query(`/items/users/${encodeURIComponent(guardId)}?fields=id,first_name,last_name,invite_code`);
+        const guard = guardResponse?.data?.data || null;
+        const inviteCode = guard?.invite_code || req.user?.invite_code;
+        if (inviteCode) {
+          await dispatchPushToOrganization({
+            inviteCode,
+            eventType: ADMIN_NOTIFICATION_TYPE.GUARD_LOGGED_OUT_ON_PATROL,
+            eventKey: `${ADMIN_NOTIFICATION_TYPE.GUARD_LOGGED_OUT_ON_PATROL}:${updatedPatrol.id}`,
+            title: `${getGuardDisplayName(guard)} logged out while on patrol`,
+            body: 'Patrol remains open and is marked as logged out on patrol.',
+            data: {
+              type: ADMIN_NOTIFICATION_TYPE.GUARD_LOGGED_OUT_ON_PATROL,
+              guard_id: guardId,
+              guard_name: getGuardDisplayName(guard),
+              patrol_id: updatedPatrol.id,
+              location: updatedPatrol.location || 'Unknown Location',
+            },
+            priority: 'high',
+          });
+        }
+      } catch (dispatchError) {
+        console.error('Failed dispatching logged-out-on-patrol push notification:', dispatchError);
+      }
+    }
+
+    if ((end_time || updatedPatrol?.end_time) && guardId) {
+      try {
+        const patrolEnd = safeDate(end_time || updatedPatrol?.end_time);
+        const guardResponse = await query(`/items/users/${encodeURIComponent(guardId)}?fields=id,first_name,last_name,invite_code`);
+        const guard = guardResponse?.data?.data || null;
+        const inviteCode = guard?.invite_code || req.user?.invite_code;
+        const assignment = await getLatestAssignmentForGuard(guardId);
+
+        if (patrolEnd && assignment?.end_time && inviteCode) {
+          const shiftEndForPatrolDate = parseShiftTimeOnReferenceDate(
+            assignment.end_time,
+            patrolEnd
+          );
+          if (shiftEndForPatrolDate && shiftEndForPatrolDate.getTime() - patrolEnd.getTime() > 60 * 1000) {
+            await dispatchPushToOrganization({
+              inviteCode,
+              eventType: ADMIN_NOTIFICATION_TYPE.PATROL_ENDED_EARLY,
+              eventKey: `${ADMIN_NOTIFICATION_TYPE.PATROL_ENDED_EARLY}:${updatedPatrol?.id || id}`,
+              title: `${getGuardDisplayName(guard)} ended patrol early`,
+              body: `Patrol ended before assigned end time (${assignment.end_time}).`,
+              data: {
+                type: ADMIN_NOTIFICATION_TYPE.PATROL_ENDED_EARLY,
+                guard_id: guardId,
+                guard_name: getGuardDisplayName(guard),
+                patrol_id: updatedPatrol?.id || id,
+                location: updatedPatrol?.location || existingPatrol?.location || 'Unknown Location',
+              },
+              priority: 'default',
+            });
+          }
+        }
+      } catch (dispatchError) {
+        console.error('Failed dispatching early-ended patrol push notification:', dispatchError);
+      }
+    }
   } catch (error) {
     console.error('Error updating patrol:', error);
     const statusCode = error.response?.status || 500;
@@ -1986,6 +2469,7 @@ app.get('/api/logs', verifyTokenMiddleware, async (req, res) => {
 app.post('/api/logs', verifyTokenMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
+    const inviteCode = req.user.invite_code;
     const { title, description, category, images, patrol_id } = req.body;
 
     // console.log("Body:", req.body)
@@ -2027,6 +2511,28 @@ app.post('/api/logs', verifyTokenMiddleware, async (req, res) => {
       message: 'Log created successfully',
       data: response.data.data
     });
+
+    try {
+      const guardName = `${req.user?.first_name || ''} ${req.user?.last_name || ''}`.trim() || 'Guard';
+      await dispatchPushToOrganization({
+        inviteCode,
+        eventType: ADMIN_NOTIFICATION_TYPE.LOG_CREATED,
+        eventKey: `${ADMIN_NOTIFICATION_TYPE.LOG_CREATED}:${response?.data?.data?.id || crypto.randomUUID()}`,
+        title: `New log from ${guardName}`,
+        body: `${title}: ${description}`,
+        data: {
+          type: ADMIN_NOTIFICATION_TYPE.LOG_CREATED,
+          guard_id: userId,
+          guard_name: guardName,
+          patrol_id: patrol_id || null,
+          log_id: response?.data?.data?.id || null,
+          category,
+        },
+        priority: category === 'incident' ? 'high' : 'default',
+      });
+    } catch (pushError) {
+      console.error('Failed dispatching new-log push notification:', pushError);
+    }
   } catch (error) {
     console.error('Error creating log:', error);
     res.status(500).json({
@@ -2043,6 +2549,24 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📱 OmniWatch API ready at http://localhost:${PORT}/api`);
   console.log(`📖 API Documentation at http://localhost:${PORT}/documentation`);
+
+  ensurePushNotificationCollections()
+    .then(() => {
+      console.log('✅ Push notification collections ready');
+      runPeriodicPushScan().catch((error) => {
+        console.error('Initial periodic push scan failed:', error);
+      });
+      if (!periodicPushScanInterval) {
+        periodicPushScanInterval = setInterval(() => {
+          runPeriodicPushScan().catch((error) => {
+            console.error('Scheduled periodic push scan failed:', error);
+          });
+        }, PERIODIC_PUSH_SCAN_MS);
+      }
+    })
+    .catch((error) => {
+      console.error('❌ Failed to initialize push notification collections. Expected Directus collections: admin_push_tokens, push_dispatches', error?.response?.data || error.message || error);
+    });
 });
 
 module.exports = app;
