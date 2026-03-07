@@ -425,12 +425,6 @@ const fetchAllDirectusItems = async (collection, params = {}, pageSize = 200) =>
   return items;
 };
 
-const ensurePushNotificationCollections = async () => {
-  // If these checks fail, the server logs actionable setup guidance.
-  await query('/fields/admin_push_tokens?fields=field');
-  await query('/fields/push_dispatches?fields=field');
-};
-
 const upsertAdminPushToken = async ({ userId, inviteCode, expoPushToken, platform }) => {
   const userIdText = String(userId);
   const existingResponse = await query(
@@ -2550,23 +2544,16 @@ app.listen(PORT, () => {
   console.log(`📱 OmniWatch API ready at http://localhost:${PORT}/api`);
   console.log(`📖 API Documentation at http://localhost:${PORT}/documentation`);
 
-  ensurePushNotificationCollections()
-    .then(() => {
-      console.log('✅ Push notification collections ready');
+  runPeriodicPushScan().catch((error) => {
+    console.error('Initial periodic push scan failed:', error);
+  });
+  if (!periodicPushScanInterval) {
+    periodicPushScanInterval = setInterval(() => {
       runPeriodicPushScan().catch((error) => {
-        console.error('Initial periodic push scan failed:', error);
+        console.error('Scheduled periodic push scan failed:', error);
       });
-      if (!periodicPushScanInterval) {
-        periodicPushScanInterval = setInterval(() => {
-          runPeriodicPushScan().catch((error) => {
-            console.error('Scheduled periodic push scan failed:', error);
-          });
-        }, PERIODIC_PUSH_SCAN_MS);
-      }
-    })
-    .catch((error) => {
-      console.error('❌ Failed to initialize push notification collections. Expected Directus collections: admin_push_tokens, push_dispatches', error?.response?.data || error.message || error);
-    });
+    }, PERIODIC_PUSH_SCAN_MS);
+  }
 });
 
 module.exports = app;
