@@ -397,6 +397,7 @@ const buildAdminNotifications = async (inviteCode, limit = 100) => {
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const PERIODIC_PUSH_SCAN_MS = 60 * 1000;
+const PERIODIC_PUSH_STARTUP_DELAY_MS = 15 * 1000;
 let periodicPushScanInterval = null;
 
 const buildDirectusQueryString = (params = {}) =>
@@ -697,6 +698,10 @@ const runPeriodicPushScan = async () => {
       await evaluatePeriodicPushRulesForOrganization(inviteCode);
     }
   } catch (error) {
+    if (error?.code === 'ECONNREFUSED') {
+      console.warn('Periodic push scan skipped: Directus is not ready yet. Will retry on next cycle.');
+      return;
+    }
     console.error('Periodic push scan failed:', error);
   }
 };
@@ -2544,9 +2549,11 @@ app.listen(PORT, () => {
   console.log(`📱 OmniWatch API ready at http://localhost:${PORT}/api`);
   console.log(`📖 API Documentation at http://localhost:${PORT}/documentation`);
 
-  runPeriodicPushScan().catch((error) => {
-    console.error('Initial periodic push scan failed:', error);
-  });
+  setTimeout(() => {
+    runPeriodicPushScan().catch((error) => {
+      console.error('Initial periodic push scan failed:', error);
+    });
+  }, PERIODIC_PUSH_STARTUP_DELAY_MS);
   if (!periodicPushScanInterval) {
     periodicPushScanInterval = setInterval(() => {
       runPeriodicPushScan().catch((error) => {
