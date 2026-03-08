@@ -17,6 +17,16 @@ const https = require('https');
 const app = express();
 const PORT = process.env.APIPORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'OhubxhJ46DEJWeRdmLERzrDgPYrSsYaCdZ0eE2ITw9pTZDIVODHXicYiZka';
+const DEFAULT_ALLOWED_ORIGINS = [
+  'http://localhost:8081',
+  'http://localhost:19000',
+  'exp://localhost:19000',
+  'http://localhost:3000',
+  'http://localhost:8057',
+];
+const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean)
+  : DEFAULT_ALLOWED_ORIGINS;
 
 // Directus API configuration
 const url = process.env.DIRECTUS_URL;
@@ -40,7 +50,12 @@ app.use(cookieParser());
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(cors({
-  origin: ['http://localhost:8081', 'http://localhost:19000', 'exp://localhost:19000', 'http://localhost:3000', 'http://localhost:8055'],
+  origin: (origin, callback) => {
+    // Native mobile requests often omit Origin entirely.
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
   credentials: true,
 }));
 
