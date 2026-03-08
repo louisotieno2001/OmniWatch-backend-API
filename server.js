@@ -778,7 +778,7 @@ async function signUp(userData) {
 
 app.post('/api/register', async (req, res) => {
   try {
-    const { firstName, lastName, phone, password, role, companyCode } = req.body;
+    const { firstName, lastName, phone, password, role, companyCode } = req.body || {};
 
     // Validate required fields
     if (!firstName || !lastName || !phone || !password) {
@@ -879,7 +879,7 @@ app.get('/api/my-assignments', verifyTokenMiddleware, async (req, res) => {
 app.put('/api/my-assignments', verifyTokenMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { location, assigned_areas, start_time, end_time } = req.body;
+    const { location, assigned_areas, start_time, end_time } = req.body || {};
 
     // Validate required fields
     if (!location || !assigned_areas || !start_time || !end_time) {
@@ -957,7 +957,7 @@ app.get('/api/locations', verifyTokenMiddleware, async (req, res) => {
  */
 app.post('/api/login', async (req, res) => {
   try {
-    const { phone, password } = req.body;
+    const { phone, password } = req.body || {};
 
     // console.log("Logging in with", phone ,"and", password)
 
@@ -1293,7 +1293,7 @@ app.delete('/api/admin/push-token', verifyTokenMiddleware, async (req, res) => {
  * Body: { token }
  */
 app.post('/api/verify-token', (req, res) => {
-  const { token } = req.body;
+  const { token } = req.body || {};
   
   if (!token) {
     return res.status(400).json({ 
@@ -1384,7 +1384,7 @@ app.get('/api/organizations/invite-codes', verifyTokenMiddleware, async (req, re
 // ============================================
 app.post('/api/organizations/validate-invite-code', async (req, res) => {
   try {
-    const { inviteCode } = req.body;
+    const { inviteCode } = req.body || {};
 
     if (!inviteCode || inviteCode.trim() === '') {
       return res.status(400).json({
@@ -1569,7 +1569,7 @@ app.get('/api/admin/guards', verifyTokenMiddleware, async (req, res) => {
 app.post('/api/admin/assignments', verifyTokenMiddleware, async (req, res) => {
   try {
     const inviteCode = req.user.invite_code;
-    const { user_id, location, assigned_areas, start_time, end_time } = req.body;
+    const { user_id, location, assigned_areas, start_time, end_time } = req.body || {};
 
     if (!inviteCode) {
       return res.status(400).json({
@@ -1849,7 +1849,7 @@ app.get('/api/admin/locations', verifyTokenMiddleware, async (req, res) => {
 app.post('/api/admin/locations', verifyTokenMiddleware, async (req, res) => {
   try {
     const inviteCode = req.user.invite_code;
-    const { name, assigned_areas } = req.body;
+    const { name, assigned_areas } = req.body || {};
 
     if (!inviteCode) {
       return res.status(400).json({
@@ -1900,7 +1900,7 @@ app.patch('/api/admin/locations/:id', verifyTokenMiddleware, async (req, res) =>
   try {
     const inviteCode = req.user.invite_code;
     const { id } = req.params;
-    const { name, assigned_areas } = req.body;
+    const { name, assigned_areas } = req.body || {};
 
     if (!inviteCode) {
       return res.status(400).json({
@@ -2154,7 +2154,7 @@ const normalizeMapValue = (value) => {
  */
 app.post('/api/patrols', verifyTokenMiddleware, async (req, res) => {
   try {
-    const { start_time, user_id, organization_id, duration, end_time, map, location_data } = req.body;
+    const { start_time, user_id, organization_id, duration, end_time, map, location_data } = req.body || {};
 
     // Validate required fields
     if (!start_time || !user_id) {
@@ -2208,7 +2208,7 @@ app.patch('/api/patrols/:id', verifyTokenMiddleware, async (req, res) => {
       map,
       location_data,
       status
-    } = req.body;
+    } = req.body || {};
 
     let existingPatrol = null;
     try {
@@ -2366,7 +2366,7 @@ app.patch('/api/patrols/:id', verifyTokenMiddleware, async (req, res) => {
 app.patch('/api/patrols/:id/location', verifyTokenMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    const { location_data } = req.body;
+    const { location_data } = req.body || {};
 
     if (!location_data || !Array.isArray(location_data)) {
       return res.status(400).json({
@@ -2484,7 +2484,7 @@ app.post('/api/logs', verifyTokenMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
     const inviteCode = req.user.invite_code;
-    const { title, description, category, images, patrol_id } = req.body;
+    const { title, description, category, images, patrol_id } = req.body || {};
 
     // console.log("Body:", req.body)
 
