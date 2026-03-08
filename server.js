@@ -16,7 +16,7 @@ const https = require('https');
 
 const app = express();
 const PORT = process.env.APIPORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'OhubxhJ46DEJWeRdmLERzrDgPYrSsYaCdZ0eE2ITw9pTZDIVODHXicYiZka';
 
 // Directus API configuration
 const url = process.env.DIRECTUS_URL;
