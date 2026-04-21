@@ -1355,6 +1355,10 @@ app.get('/privacy-policy', (req, res) => {
   res.render('privacy_policy');
 });
 
+app.get('/delete-data', (req, res) => {
+  res.render('delete_data');
+});
+
 app.get('/terms-of-service', (req, res) => {
   res.render('terms_of_service');
 });
