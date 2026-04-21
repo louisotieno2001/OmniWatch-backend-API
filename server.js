@@ -2556,9 +2556,59 @@ app.post('/api/logs', verifyTokenMiddleware, async (req, res) => {
   }
 });
 
- // ============================================
- // START SERVER
- // ============================================
+// ============================================
+// Deleting user account
+// ============================================
+const deleteUserAccount = async (userId) => {
+  try {
+    const deleteRelatedRecords = async (collection) => {
+      const listResponse = await query(
+        `/items/${collection}?filter[user_id][_eq]=${encodeURIComponent(userId)}&fields=id&limit=-1`
+      );
+      const items = listResponse.data.data || [];
+      for (const item of items) {
+        await query(`/items/${collection}/${encodeURIComponent(item.id)}`, {
+          method: 'DELETE',
+        });
+      }
+      return items.length;
+    };
+
+    const deletedAssignments = await deleteRelatedRecords('assignments');
+    const deletedLogs = await deleteRelatedRecords('logs');
+    const deletedPatrols = await deleteRelatedRecords('patrols');
+
+    await query(`/items/users/${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+    });
+
+    console.log(`User ${userId} and related records deleted successfully`);
+  } catch (error) {
+    console.error(`Error deleting user ${userId}:`, error);
+  }
+};
+
+// Endpoint for users to delete their own account
+app.delete('/api/account', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    await deleteUserAccount(userId);
+    res.json({
+      message: 'Your account and related data have been deleted successfully',
+    });
+  } catch (error) {
+    console.error('Error deleting user account:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'Failed to delete account',
+    });
+  }
+});
+
+
+// ============================================
+// START SERVER
+// ============================================
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📱 OmniWatch API ready at http://localhost:${PORT}/api`);
