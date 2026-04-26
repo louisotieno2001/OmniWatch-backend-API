@@ -559,7 +559,7 @@ const dispatchPushToOrganization = async ({
     body,
     data: data || {},
     priority,
-    channelId: 'omniwatch-alerts',
+    channelId: 'patrollink-alerts',
   }));
 
   const expoResponse = await sendExpoPushNotifications(messages);
@@ -1418,7 +1418,7 @@ app.post('/api/organizations/validate-invite-code', async (req, res) => {
     } else {
       res.status(404).json({
         valid: false,
-        message: 'The organization is not registered with OmniWatch'
+        message: 'The organization is not registered with PatrolLink. Please check the code and try again, or contact your administrator.'
       });
     }
   } catch (error) {
@@ -2623,7 +2623,7 @@ app.delete('/api/account', verifyTokenMiddleware, async (req, res) => {
 // ============================================
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📱 OmniWatch API ready at http://localhost:${PORT}/api`);
+  console.log(`📱 PatrolLink API ready at http://localhost:${PORT}/api`);
   console.log(`📖 API Documentation at http://localhost:${PORT}/documentation`);
 
   setTimeout(() => {
