@@ -1525,10 +1525,35 @@ app.get('/api/patrols', verifyTokenMiddleware, async (req, res) => {
 
     // Fetch patrols for this guard from Directus
     const response = await query(`/items/patrols?filter[user_id][_eq]=${userId}&sort=${sort}&limit=${limit}`);
+    const patrols = response.data.data || [];
+
+    // Enrich patrols with GPS points from the high-scale table
+    const patrolIds = patrols.map(p => p.id);
+    let pointsByPatrol = {};
+    if (patrolIds.length > 0) {
+      try {
+        const pointsResult = await pool.query(
+          'SELECT patrol_id, latitude, longitude, timestamp FROM gps_points WHERE patrol_id = ANY($1) ORDER BY timestamp ASC',
+          [patrolIds]
+        );
+        pointsByPatrol = pointsResult.rows.reduce((acc, point) => {
+          if (!acc[point.patrol_id]) acc[point.patrol_id] = [];
+          acc[point.patrol_id].push({
+            latitude: point.latitude,
+            longitude: point.longitude,
+            timestamp: point.timestamp
+          });
+          return acc;
+        }, {});
+      } catch (pointsError) {
+        console.error('Error fetching GPS points for enrichment:', pointsError);
+      }
+    }
 
     res.json({
-      patrols: (response.data.data || []).map((patrol) => ({
+      patrols: patrols.map((patrol) => ({
         ...patrol,
+        map: pointsByPatrol[patrol.id] || patrol.map || [],
         status: normalizePatrolLifecycleStatus(patrol.status),
       })),
     });
@@ -1768,6 +1793,19 @@ app.delete('/api/admin/guards/:id', verifyTokenMiddleware, async (req, res) => {
 
     const deletedAssignments = await deleteRelatedRecords('assignments');
     const deletedLogs = await deleteRelatedRecords('logs');
+
+    try {
+      const patrolListResponse = await query(
+        `/items/patrols?filter[user_id][_eq]=${encodeURIComponent(id)}&fields=id&limit=-1`
+      );
+      const patrolIds = (patrolListResponse.data.data || []).map(p => p.id);
+      if (patrolIds.length > 0) {
+        await pool.query('DELETE FROM gps_points WHERE patrol_id = ANY($1::varchar[])', [patrolIds]);
+      }
+    } catch (gpsError) {
+      console.error(`Error deleting GPS points for guard ${id}:`, gpsError);
+    }
+
     const deletedPatrols = await deleteRelatedRecords('patrols');
 
     await query(`/items/users/${encodeURIComponent(id)}`, {
@@ -1835,6 +1873,29 @@ app.get('/api/admin/patrols', verifyTokenMiddleware, async (req, res) => {
     // Limit results
     const limitedPatrols = allPatrols.slice(0, parseInt(limit));
 
+    // Enrich patrols with GPS points from the new high-scale table
+    const patrolIds = limitedPatrols.map(p => p.id);
+    let pointsByPatrol = {};
+    if (patrolIds.length > 0) {
+      try {
+        const pointsResult = await pool.query(
+          'SELECT patrol_id, latitude, longitude, timestamp FROM gps_points WHERE patrol_id = ANY($1) ORDER BY timestamp ASC',
+          [patrolIds]
+        );
+        pointsByPatrol = pointsResult.rows.reduce((acc, point) => {
+          if (!acc[point.patrol_id]) acc[point.patrol_id] = [];
+          acc[point.patrol_id].push({
+            latitude: point.latitude,
+            longitude: point.longitude,
+            timestamp: point.timestamp
+          });
+          return acc;
+        }, {});
+      } catch (pointsError) {
+        console.error('Error fetching GPS points for enrichment:', pointsError);
+      }
+    }
+
     // Build location lookup so assignment location IDs can be resolved to names.
     const locationsById = new Map();
     try {
@@ -1881,6 +1942,7 @@ app.get('/api/admin/patrols', verifyTokenMiddleware, async (req, res) => {
 
       enrichedPatrols.push({
         ...patrol,
+        map: pointsByPatrol[patrol.id] || patrol.map || [],
         status: normalizePatrolLifecycleStatus(patrol.status),
         guard_name: guardName || patrol.guard_name || 'Unknown Guard',
         assigned_areas: assignmentAreas || patrol.assigned_areas || '',
@@ -2333,6 +2395,22 @@ app.patch('/api/patrols/:id', verifyTokenMiddleware, async (req, res) => {
       updateData.status = PATROL_STATUS.COMPLETED;
     }
 
+    // If patrol is being ended, aggregate all points from gps_points and sync to 'map' field
+    // for permanent record in Directus. This runs only once per patrol.
+    if (updateData.status === PATROL_STATUS.COMPLETED || end_time) {
+      try {
+        const pointsResult = await pool.query(
+          'SELECT latitude, longitude, timestamp FROM gps_points WHERE patrol_id = $1 ORDER BY timestamp ASC',
+          [id]
+        );
+        if (pointsResult.rows.length > 0) {
+          updateData.map = JSON.stringify(pointsResult.rows);
+        }
+      } catch (syncError) {
+        console.error('Failed to sync GPS points to patrol map on completion:', syncError);
+      }
+    }
+
     // Update patrol in Directus. If duration is rejected by schema/permissions,
     // retry without duration so patrol completion still gets recorded.
     let response;
@@ -2449,88 +2527,61 @@ app.patch('/api/patrols/:id', verifyTokenMiddleware, async (req, res) => {
 
 /**
  * PATCH /api/patrols/:id/location
- * Update patrol location incrementally (append new points to existing map data)
+ * Update patrol location incrementally by inserting new points into the gps_points table.
  * Body: { location_data: [{ latitude, longitude, timestamp }, ...] }
- * This endpoint fetches existing map data, appends new points, and saves back
  */
 app.patch('/api/patrols/:id/location', verifyTokenMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
     const { location_data } = req.body || {};
 
-    if (!location_data || !Array.isArray(location_data)) {
+    if (!location_data || !Array.isArray(location_data) || location_data.length === 0) {
       return res.status(400).json({
         error: 'Validation Error',
-        message: 'location_data array is required'
+        message: 'location_data array is required and must not be empty'
       });
     }
 
-    // Fetch existing patrol to get current map data
-    const patrolResponse = await query(`/items/patrols/${id}`);
-    
-    if (!patrolResponse.data.data) {
-      return res.status(404).json({
-        error: 'Not Found',
-        message: 'Patrol not found'
-      });
-    }
+    // Build values for multi-row insert
+    const values = [];
+    const params = [];
+    let paramCounter = 1;
 
-    const existingMapData = patrolResponse.data.data.map;
-    let existingLocations = [];
+    location_data.forEach((point) => {
+      const lat = parseFloat(point.latitude);
+      const lng = parseFloat(point.longitude);
+      const ts = point.timestamp || new Date().toISOString();
 
-    // Parse existing map data if it exists
-    if (existingMapData) {
-      if (Array.isArray(existingMapData)) {
-        existingLocations = existingMapData;
-      } else if (typeof existingMapData === 'string') {
-        const trimmedMap = existingMapData.trim();
-        if (trimmedMap === '[object Object]') {
-          existingLocations = [];
-        } else {
-          try {
-            existingLocations = JSON.parse(existingMapData);
-            if (!Array.isArray(existingLocations)) {
-              existingLocations = [];
-            }
-          } catch (parseError) {
-            console.error('Error parsing existing map data:', parseError);
-            existingLocations = [];
-          }
-        }
-      } else if (typeof existingMapData === 'object') {
-        if (Array.isArray(existingMapData.location_data)) {
-          existingLocations = existingMapData.location_data;
-        } else {
-          existingLocations = [existingMapData];
-        }
+      if (!isNaN(lat) && !isNaN(lng)) {
+        values.push(`($${paramCounter}, $${paramCounter + 1}, $${paramCounter + 2}, $${paramCounter + 3})`);
+        params.push(id, lat, lng, ts);
+        paramCounter += 4;
       }
+    });
+
+    if (values.length === 0) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        message: 'No valid coordinates found in location_data'
+      });
     }
 
-    // Append new location points
-    const updatedLocations = [...existingLocations, ...location_data];
+    const sql = `
+      INSERT INTO gps_points (patrol_id, latitude, longitude, timestamp)
+      VALUES ${values.join(', ')}
+    `;
 
-    // Update patrol with new map data
-    const updateData = {
-      map: JSON.stringify(updatedLocations)
-    };
-
-    const response = await query(`/items/patrols/${id}`, {
-      method: 'PATCH',
-      data: updateData
-    });
+    await pool.query(sql, params);
 
     res.json({
-      message: 'Location updated successfully',
-      data: response.data.data,
-      points_count: updatedLocations.length
+      message: 'Location points recorded successfully',
+      points_count: values.length
     });
   } catch (error) {
-    console.error('Error updating patrol location:', error);
-    const statusCode = error.response?.status || 500;
-    res.status(statusCode).json({
+    console.error('Error recording patrol location:', error);
+    res.status(500).json({
       error: 'Internal Server Error',
-      message: 'Failed to update patrol location',
-      details: error.response?.data || error.message
+      message: 'Failed to record location data'
     });
   }
 });
@@ -2666,6 +2717,19 @@ const deleteUserAccount = async (userId) => {
 
     const deletedAssignments = await deleteRelatedRecords('assignments');
     const deletedLogs = await deleteRelatedRecords('logs');
+
+    try {
+      const patrolListResponse = await query(
+        `/items/patrols?filter[user_id][_eq]=${encodeURIComponent(userId)}&fields=id&limit=-1`
+      );
+      const patrolIds = (patrolListResponse.data.data || []).map(p => p.id);
+      if (patrolIds.length > 0) {
+        await pool.query('DELETE FROM gps_points WHERE patrol_id = ANY($1::varchar[])', [patrolIds]);
+      }
+    } catch (gpsError) {
+      console.error(`Error deleting GPS points for user ${userId}:`, gpsError);
+    }
+
     const deletedPatrols = await deleteRelatedRecords('patrols');
 
     await query(`/items/users/${encodeURIComponent(userId)}`, {
